@@ -1,0 +1,36 @@
+{
+  "id": "foundry-v1",
+  "license": "CC0-1.0",
+  "samples": [
+    {
+      "name": "kick",
+      "url": "/samples/foundry-v1/kick.wav",
+      "sha256": "4bdfc862e7d11d71070c2d0668eb966753516f162eaf5715dbe7a3fe842ce751"
+    },
+    {
+      "name": "snare",
+      "url": "/samples/foundry-v1/snare.wav",
+      "sha256": "222f74732b2381479d2dd336ff6cabd634dcfe4627c4569108c0f571b364c387"
+    },
+    {
+      "name": "closed-hat",
+      "url": "/samples/foundry-v1/closed-hat.wav",
+      "sha256": "a39c250b90e70ef8538cdeb13bb80df32912193ebe2fc5b9c8c24e72cab791e7"
+    },
+    {
+      "name": "open-hat",
+      "url": "/samples/foundry-v1/open-hat.wav",
+      "sha256": "9998a4451e0148923dcd985a4d95bdbc424808933b45e170aea86b17652ac769"
+    },
+    {
+      "name": "clap",
+      "url": "/samples/foundry-v1/clap.wav",
+      "sha256": "d33e5d8e6d7132a982b1e0006fcb05b1698e398b368ac5868ca181599709f710"
+    },
+    {
+      "name": "sub",
+      "url": "/samples/foundry-v1/sub.wav",
+      "sha256": "60967c671c3226b7704c08eafed2b8091d0c75cb7f8b6ba346bf551c634cebbf"
+    }
+  ]
+}

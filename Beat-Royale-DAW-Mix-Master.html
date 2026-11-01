@@ -1,0 +1,894 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Beat Royale · Mastering Console & FX Rack</title>
+    
+    <!-- Ultra-stable Global CDN Imports (Bypasses all ESM/ImportMap Sandboxing Issues) -->
+    <script src="https://unpkg.com/vue@3.3.4/dist/vue.global.prod.js"></script>
+    <script src="https://unpkg.com/vue-router@4.2.5/dist/vue-router.global.prod.js"></script>
+    <script src="https://unpkg.com/vue-demi@0.14.6/lib/index.iife.js"></script>
+    <script src="https://unpkg.com/pinia@2.1.7/dist/pinia.iife.prod.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@vueform/slider@2.1.10/dist/slider.global.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+    
+    <!-- Vueform Slider CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@vueform/slider@2.1.10/themes/default.css">
+    
+    <!-- Unified Classes -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/kr10o/beat-royale-synth@main/classes.css">
+
+    <style>
+        /* * STRICT 50/50 LAYOUT ENFORCEMENT 
+         * Overrides any conflicting styles to guarantee rigid percentage heights 
+         */
+        body, html { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #000; }
+        
+        .app-workspace { height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+        .main-header { flex: 0 0 auto; } /* Header takes its natural height */
+        
+        .workspace-split { 
+            flex: 1; /* Takes all remaining vertical space */
+            display: flex; 
+            flex-direction: column; 
+            overflow: hidden; 
+            height: 100%; 
+        }
+        
+        .main-content { 
+            height: 50%; 
+            flex: 0 0 50%; /* Exactly 50% of the workspace split */
+            display: flex; 
+            flex-direction: column; 
+            overflow: hidden; 
+        }
+        
+        .rack-footer { 
+            height: 50%; 
+            flex: 0 0 50%; /* Exactly 50% of the workspace split */
+            display: flex; 
+            flex-direction: column; 
+            overflow: hidden; 
+        }
+
+        .mixer-workspace { flex: 1; display: flex; overflow: hidden; }
+        .mixer-left, .mixer-right { height: 100%; display: flex; flex-direction: column; overflow: hidden; }
+        
+        .mixer-strips-container { flex: 1; display: flex; overflow-x: auto; overflow-y: hidden; }
+        .bus-rows-container { flex: 1; overflow-y: auto; overflow-x: hidden; }
+        .rack-chain { flex: 1; overflow-y: auto; overflow-x: hidden; }
+
+        /* Small overrides to fit the new sliders natively into existing wrappers */
+        .slider-horizontal-wrap { padding: 12px 15px; flex: 1; }
+        .pan-slider-wrap { padding: 15px 5px 5px 5px; }
+        .wet-slider-wrap { flex: 1; margin: 0 10px; display: flex; align-items: center; }
+
+        /* Vertical volume fader. @vueform/slider has NO --slider-vertical-height
+         * or --slider-width var; the vertical track width is --slider-height and
+         * its length is the CSS height on .slider-vertical. Force exact dimensions
+         * with !important so the default theme can't balloon it into a blob. */
+        .fader-v-wrap { overflow: visible; display: flex; justify-content: center; align-items: center; }
+        .fader-v-wrap .slider-target { width: 6px !important; height: 173px !important; margin: 0 auto !important; }
+        .fader-v-wrap .slider-vertical { width: 6px !important; height: 173px !important; }
+        .fader-v-wrap .slider-base,
+        .fader-v-wrap .slider-connects {
+            width: 6px !important; height: 100% !important;
+            border-radius: 3px !important; overflow: hidden !important;
+        }
+        /* The filled portion: keep it the same 6px column, square corners so it
+         * reads as a track fill rather than a rounded pill. */
+        .fader-v-wrap .slider-connect {
+            width: 6px !important; left: 0 !important; right: 0 !important;
+            border-radius: 0 !important;
+        }
+        .fader-v-wrap .slider-handle {
+            width: 14px !important; height: 14px !important;
+            right: -4px !important; left: auto !important;
+            border-radius: 50% !important; box-shadow: 0 1px 3px rgba(0,0,0,0.6);
+        }
+        .fader-v-wrap .slider-tooltip { display: none !important; }
+    </style>
+</head>
+<body>
+
+<!-- Vue App Root with Vue Router View -->
+<div id="app">
+    <router-view></router-view>
+</div>
+
+<!-- COMPONENT TEMPLATE: Mixer Workspace -->
+<template id="mixer-page">
+    <div class="app-workspace">
+        <!-- HEADER -->
+        <header class="main-header">
+            <div class="logo-mini">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"></path>
+                </svg>
+                <h1>BEAT ROYALE <span>MIX & MASTER</span></h1>
+            </div>
+            <div class="global-controls" style="margin-left: auto;">
+                <button @click="togglePlayback" :class="['btn-toggle', isPlaying ? 'active' : '']">
+                    {{ isPlaying ? 'STOP PLAYBACK' : 'START PLAYBACK' }}
+                </button>
+                <div class="divider"></div>
+                <button @click="toggleExport" :class="['btn-record', isExporting ? 'recording' : '']">
+                    <div class="record-indicator"></div>
+                    {{ isExporting ? 'STOP & SAVE .WAV' : 'RENDER MIX' }}
+                </button>
+            </div>
+        </header>
+
+        <div class="workspace-split">
+            <!-- TOP 50%: MIXER -->
+            <main class="main-content">
+                <div class="master-meter-bar" style="flex: 0 0 auto;">
+                    <canvas ref="mainCanvas"></canvas>
+                </div>
+
+                <section class="mixer-workspace">
+                    <!-- LEFT: TRACK MIXER -->
+                    <div class="synth-panel mixer-left">
+                        <div class="panel-header">
+                            <span class="panel-title color-cyan">TRACK MIXER</span>
+                            <button class="btn-preset-action color-cyan" @click="addTrack"
+                                    style="border-color: var(--cyan-accent);">+ ADD TRACK
+                            </button>
+                        </div>
+                        <div class="mixer-strips-container">
+                            <div v-for="track in tracks" :key="track.id" class="track-strip">
+                                <label v-if="!track.loaded" class="empty-track-btn">
+                                    <span style="font-size: 20px; margin-bottom: 5px;">+</span>
+                                    <span style="font-size: 9px; padding: 0 4px;">LOAD AUDIO</span>
+                                    <input type="file" @change="(e) => importTrack(e, track.id)" accept="audio/*" class="hidden-input"/>
+                                </label>
+                                <template v-else>
+                                    <select v-model="track.bus" @change="rebuildGraph" class="routing-select">
+                                        <option v-for="ch in channels" :key="ch.id" :value="ch.id">
+                                            {{ ch.id === 'master' ? '→ M' : '→ ' + ch.name.replace('FX BUS ', '') }}
+                                        </option>
+                                    </select>
+                                    
+                                    <!-- Pan Slider -->
+                                    <div class="pan-slider-wrap">
+                                        <Slider v-model="track.pan" :min="-1" :max="1" :step="0.01" @update="updateTrackParams(track)" :tooltips="false" 
+                                                style="--slider-connect-bg: #fff; --slider-bg: #1a1a24; --slider-handle-width: 12px; --slider-handle-height: 12px; --slider-height: 4px;" />
+                                    </div>
+
+                                    <div class="ms-group">
+                                        <button @click="toggleTrackMute(track)" :class="['btn-ms', track.muted ? 'active-m' : '']">M</button>
+                                        <button @click="toggleTrackSolo(track)" :class="['btn-ms', track.soloed ? 'active-s' : '']">S</button>
+                                    </div>
+                                    
+                                    <!-- Volume Fader -->
+                                    <div class="fader-v-wrap" style="height: 173px; flex: 1; margin-top: 6px; display: flex; justify-content: center; align-items: center;">
+                                        <Slider v-model="track.volume" orientation="vertical" direction="rtl" :min="-60" :max="6" :step="0.1" @update="updateTrackParams(track)" 
+                                                style="--slider-connect-bg: var(--cyan-accent); --slider-bg: #1a1a24; --slider-handle-bg: #fff;" />
+                                    </div>
+
+                                    <button @click="deleteTrack(track.id)" class="btn-delete-icon" title="Delete Track">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                            <polyline points="3 6 5 6 21 6"></polyline>
+                                            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
+                                            <path d="M10 11v6"></path>
+                                            <path d="M14 11v6"></path>
+                                            <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path>
+                                        </svg>
+                                    </button>
+                                    <div class="control-label track-name-vertical" :title="track.name">{{ track.name }}</div>
+                                </template>
+                            </div>
+                            <div class="track-strip" style="background: transparent; border-color: transparent; justify-content: center; align-items: center; opacity: 0.3; flex-shrink: 0;">
+                                <span class="color-cyan" style="font-size: 2rem;">...</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- RIGHT: FX BUSES -->
+                    <div class="synth-panel mixer-right">
+                        <div class="panel-header">
+                            <span class="panel-title color-purple">FX BUSES & MASTER</span>
+                            <button class="btn-preset-action color-purple" @click="addChannel" style="border-color: var(--purple-accent);">+ ADD BUS</button>
+                        </div>
+                        <div class="bus-rows-container">
+                            <div v-for="ch in channels" :key="ch.id" class="bus-row" :style="ch.id === 'master' ? 'border-color: var(--red-accent);' : ''">
+                                <div style="width: 70px; display: flex; flex-direction: column;">
+                                    <span :class="['control-label', ch.id === 'master' ? 'color-red' : 'color-purple']" style="font-weight: bold; font-size: 10px;">{{ ch.name }}</span>
+                                    <span class="control-label" style="font-size: 8px; opacity: 0.6;">
+                                        {{ ch.id === 'master' ? 'OUTPUT' : '-> MASTER' }}
+                                    </span>
+                                </div>
+                                <div class="ms-group" style="margin: 0;">
+                                    <button @click="toggleChannelMute(ch)" :class="['btn-ms', ch.muted ? 'active-m' : '']">M</button>
+                                    <button @click="toggleChannelSolo(ch)" :class="['btn-ms', ch.soloed ? 'active-s' : '']">S</button>
+                                </div>
+                                
+                                <!-- Bus Volume -->
+                                <div class="slider-horizontal-wrap">
+                                    <Slider v-model="ch.volume" :min="-60" :max="6" :step="0.1" @update="updateChannelParams(ch)" 
+                                            :style="ch.id === 'master' ? '--slider-connect-bg: var(--red-accent); --slider-tooltip-bg: var(--red-accent);' : '--slider-connect-bg: var(--purple-accent); --slider-tooltip-bg: var(--purple-accent);'" 
+                                            style="--slider-bg: #1a1a24; --slider-handle-bg: #fff; --slider-height: 6px;" />
+                                </div>
+
+                                <button v-if="ch.id !== 'master'" @click="removeChannel(ch.id)" class="btn-preset-action color-red" title="Delete Bus">X</button>
+                                <div v-else style="width: 24px;"></div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+            </main>
+
+            <!-- BOTTOM 50%: EFFECTS RACK -->
+            <footer class="rack-footer">
+                <div class="rack-tabs">
+                    <button v-for="ch in channels" :key="ch.id" @click="selectedChannelId = ch.id" :class="['rack-tab-btn', selectedChannelId === ch.id ? 'active' : '']">
+                        {{ ch.name }} RACK
+                    </button>
+                </div>
+                <div class="rack-body">
+                    <!-- Library -->
+                    <aside class="rack-library">
+                        <div v-for="group in rackGroups" :key="group">
+                            <div class="lib-group-title">
+                                <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--accent2);"></span>
+                                {{ group }}
+                            </div>
+                            <button v-for="def in palette[group]" :key="def.id" class="lib-btn" @click="addEffectToChannel(def)">
+                                <span class="idx">#{{ def.num }}</span>
+                                <span style="flex:1">{{ def.name }}</span>
+                                <span style="color:var(--accent);opacity:0.6;">+</span>
+                            </button>
+                        </div>
+                    </aside>
+
+                    <!-- Chain -->
+                    <main class="rack-chain">
+                        <div v-if="!selectedChannelObj || !selectedChannelObj.chain.length" style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--off);flex-direction:column;">
+                            <div style="font-size:1.5rem;margin-bottom:0.5rem;">EMPTY CHAIN</div>
+                            <div style="color:var(--dim);font-size:0.8rem;">Select modules from the library</div>
+                        </div>
+                        <div v-else>
+                            <template v-for="item in selectedChannelObj.chain" :key="item.uid">
+                            <div v-if="defOf(item)" class="fx-module"
+                                 :class="{bypassed: item.bypass, dragging: dragId===item.uid, 'drop-target': dropId===item.uid && dragId!==item.uid}"
+                                 draggable="true"
+                                 @dragstart="onDragStart(item.uid)" @dragover="onDragOver(item.uid, $event)" @drop="onDrop(item.uid)" @dragend="onDragEnd">
+                                
+                                <div class="fx-header">
+                                    <span class="drag-handle" title="Drag to reorder">⠿</span>
+                                    <div class="fx-led" :class="{lit: !item.bypass && isPlaying}"></div>
+                                    <div style="flex:1;min-width:0;">
+                                        <span style="font-weight:bold;color:var(--gold);font-size:10px;">#{{ defOf(item).num }}</span>
+                                        <span style="font-size:1rem;color:var(--ink);margin-left:0.3rem;">{{ defOf(item).name }}</span>
+                                        <div style="font-size:10px;color:var(--dim);margin-top:2px;">{{ defOf(item).blurb }}</div>
+                                    </div>
+                                    <div class="fx-toggle" :class="{on: !item.bypass}" @click="toggleBypassForItem(item)">
+                                        <div class="dot"></div>
+                                    </div>
+                                    <button style="background:none;border:1px solid #444;color:#aaa;border-radius:4px;cursor:pointer;width:22px;height:22px;display:flex;align-items:center;justify-content:center;margin-left:0.3rem;"
+                                            @click="removeEffectFromChannel(item.uid)">✕</button>
+                                </div>
+                                
+                                <div class="fx-param-row">
+                                    <div v-for="p in defOf(item).params" :key="p.key" class="fx-param-knob">
+                                        <div class="fx-knob" :style="{'--val': knobNorm(item, p)}" @mousedown="knobDrag(item, p, $event)" @touchstart="knobDrag(item, p, $event)"></div>
+                                        <span style="font-size:10px;font-weight:bold;">{{ fmt(item, p) }}</span>
+                                        <span style="font-size:9px;color:var(--dim);text-transform:uppercase;">{{ p.label }}</span>
+                                    </div>
+                                    
+                                    <div class="fx-param-knob" style="margin-left:auto; width: 140px; display: flex; flex-direction: row;">
+                                        <div class="fx-knob wet-knob" :style="{'--val': item.wet}" @mousedown="knobDragWet(item, $event)" @touchstart="knobDragWet(item, $event)"></div>
+                                        <!-- FX Wet Slider -->
+                                        <div class="wet-slider-wrap">
+                                            <Slider :model-value="item.wet" :min="0" :max="1" :step="0.01" @update="setWetForItem(item, $event)" :tooltips="false" 
+                                                    style="--slider-connect-bg: var(--accent2); --slider-bg: #222; --slider-handle-width: 10px; --slider-handle-height: 10px; --slider-height: 4px; width: 100%;" />
+                                        </div>
+                                        <span style="font-size:9px;color:var(--accent2); align-self: center;">WET {{ Math.round(item.wet * 100) }}%</span>
+                                    </div>
+                                </div>
+                            </div>
+                            </template>
+                        </div>
+                    </main>
+                </div>
+            </footer>
+        </div>
+    </div>
+</template>
+
+<script>
+    const { createApp, ref, computed, onMounted, onUnmounted } = Vue;
+    const { createPinia, defineStore, storeToRefs } = Pinia;
+    const { createRouter, createWebHashHistory } = VueRouter;
+
+    /* ========== EFFECTS DICTIONARY — PURE TONE.JS ========== */
+    /* ========== EFFECTS DICTIONARY — PURE TONE.JS ========== */
+    const A3 = 220;
+
+    function nativeWrap(fx) {
+        return {
+            _in: fx, _out: fx, wet: fx.wet, _nodes: [fx],
+            connect(dest) { return fx.connect(dest && dest._in ? dest._in : dest); },
+            disconnect() { try { fx.disconnect(); } catch (e) {} return this; },
+            dispose() { try { fx.dispose(); } catch (e) {} }
+        };
+    }
+
+    function wetWrap(head, tail, extraNodes) {
+        tail = tail || head;
+        const input = new Tone.Gain(1);
+        const xfade = new Tone.CrossFade(1);
+        input.connect(head);          // input -> processor
+        input.connect(xfade.a);       // dry path  (fade=0 => a)
+        tail.connect(xfade.b);        // wet path  (fade=1 => b)
+        const all = [input, xfade, head]; if (tail !== head) all.push(tail);
+        if (extraNodes) for (const n of extraNodes) if (!all.includes(n)) all.push(n);
+        return {
+            _in: input, _out: xfade, wet: xfade.fade, _nodes: all,
+            connect(dest) { return xfade.connect(dest && dest._in ? dest._in : dest); },
+            disconnect() { try { xfade.disconnect(); } catch (e) {} return this; },
+            dispose() { all.forEach(n => { try { n.dispose(); } catch (e) {} }); }
+        };
+    }
+
+    const EFFECTS = [
+        { id: 'fir_pascal', num: 38, name: 'Pascal Binomial FIR', group: 'TONAL / EQ', blurb: 'Gaussian smoother – transparent de‑harshing (lowpass).', params: [{ key: 'order', label: 'Smoothing', min: 2, max: 24, def: 12, step: 2 }], build(p) { const flt = new Tone.Filter({ type: 'lowpass', frequency: 9000 - p.order * 320, rolloff: -24, Q: 0.4 }); const w = wetWrap(flt); return { node: w, set(np) { flt.frequency.rampTo(9000 - np.order * 320, 0.05); }, dispose() { w.dispose(); } }; } },
+        { id: 'fokker', num: 94, name: 'Fokker–Planck Smoother', group: 'TONAL / EQ', blurb: 'Dynamic tilt EQ that drifts toward target.', params: [{ key: 'target', label: 'Target dB', min: -12, max: 12, def: -3, step: 0.5 }, { key: 'freq', label: 'Pivot Hz', min: 500, max: 6000, def: 2000, step: 50 }], build(p) { const flt = new Tone.Filter({ type: 'highshelf', frequency: p.freq, gain: 6 }); const w = wetWrap(flt); let g = 6, target = p.target; const t = setInterval(() => { g += -0.05 * (g - target); flt.gain.rampTo(g, 0.1); }, 80); return { node: w, set(np) { target = np.target; flt.frequency.rampTo(np.freq, 0.1); }, dispose() { clearInterval(t); w.dispose(); } }; } },
+        { id: 'maxwell', num: 95, name: 'Maxwell–Boltzmann Shaper', group: 'TONAL / EQ', blurb: 'Straight tilt EQ – one knob.', params: [{ key: 'temp', label: 'Temp', min: 0.3, max: 3, def: 1, step: 0.05 }], build(p) { const eq = new Tone.EQ3({ low: -6 / p.temp, mid: 0, high: 6 * p.temp, lowFrequency: 800, highFrequency: 3000 }); const w = wetWrap(eq); return { node: w, set(np) { eq.low.rampTo(-6 / np.temp, 0.08); eq.high.rampTo(6 * np.temp, 0.08); }, dispose() { w.dispose(); } }; } },
+        { id: 'boltz', num: 96, name: 'Boltzmann Thermal EQ', group: 'TONAL / EQ', blurb: 'High‑shelf air band.', params: [{ key: 'temp', label: 'Temp', min: 0, max: 4, def: 1.5, step: 0.05 }, { key: 'freq', label: 'Air Hz', min: 1500, max: 9000, def: 2500, step: 100 }], build(p) { const flt = new Tone.Filter({ type: 'highshelf', frequency: p.freq, gain: 12 * Math.log(1 + p.temp) }); const w = wetWrap(flt); return { node: w, set(np) { flt.gain.rampTo(12 * Math.log(1 + np.temp), 0.1); flt.frequency.rampTo(np.freq, 0.1); }, dispose() { w.dispose(); } }; } },
+        { id: 'hmcross', num: 10, name: 'Harmonic‑Mean Crossover', group: 'TONAL / EQ', blurb: 'Two‑band tilt via harmonic‑mean split.', params: [{ key: 'a', label: 'Low Hz', min: 100, max: 1500, def: 400, step: 10 }, { key: 'b', label: 'High Hz', min: 1500, max: 9000, def: 4000, step: 50 }, { key: 'tilt', label: 'Hi/Lo Mix', min: 0, max: 1, def: 0.5, step: 0.01 }], build(p) { const hm = 2 * p.a * p.b / (p.a + p.b); const eq = new Tone.EQ3({ low: (1 - p.tilt) * 12 - 6, mid: 0, high: p.tilt * 12 - 6, lowFrequency: hm, highFrequency: hm }); const w = wetWrap(eq); return { node: w, set(np) { const h = 2 * np.a * np.b / (np.a + np.b); eq.lowFrequency.rampTo(h, 0.05); eq.highFrequency.rampTo(h, 0.05); eq.low.rampTo((1 - np.tilt) * 12 - 6, 0.05); eq.high.rampTo(np.tilt * 12 - 6, 0.05); }, dispose() { w.dispose(); } }; } },
+        { id: 'mandel', num: 87, name: 'Mandelbrot Escape EQ', group: 'TONAL / EQ', blurb: 'Multiband peaking EQ from fractal escape time.', params: [{ key: 'seed', label: 'Fractal C', min: -2.2, max: 0.6, def: -2, step: 0.02 }, { key: 'depth', label: 'Gain Range', min: 4, max: 24, def: 12, step: 1 }], build(p) { function escape(c) { let z = 0, i = 0; while (Math.abs(z) < 2 && i < 30) { z = z * z + c; i++; } return i / 30; } const head = new Tone.Gain(1), tail = new Tone.Gain(1); const filters = []; for (let k = 0; k < 8; k++) { const f = 100 * Math.pow(2, k * 7 / 8); const g = escape(p.seed + k * 0.25); const flt = new Tone.Filter({ type: 'peaking', frequency: f, Q: 3 }); flt.gain.value = -p.depth + 2 * p.depth * g; head.connect(flt); flt.connect(tail); filters.push({ flt, k }); } const w = wetWrap(head, tail, filters.map(o => o.flt)); return { node: w, set(np) { for (const { flt, k } of filters) { const g = escape(np.seed + k * 0.25); flt.gain.rampTo(-np.depth + 2 * np.depth * g, 0.06); } }, dispose() { w.dispose(); } }; } },
+        { id: 'tunnel', num: 68, name: 'Quantum‑Tunneling Bandpass', group: 'TONAL / EQ', blurb: 'Resonant bandpass focus.', params: [{ key: 'freq', label: 'Freq Hz', min: 200, max: 8000, def: 1500, step: 25 }, { key: 'q', label: 'Width Q', min: 0.3, max: 12, def: 1, step: 0.1 }], build(p) { const flt = new Tone.Filter({ type: 'bandpass', frequency: p.freq, Q: p.q }); const w = wetWrap(flt); return { node: w, set(np) { flt.frequency.rampTo(np.freq, 0.05); flt.Q.rampTo(np.q, 0.05); }, dispose() { w.dispose(); } }; } },
+        { id: 'casimir', num: 84, name: 'Casimir Resonator', group: 'TONAL / EQ', blurb: 'Clean notch for killing ringing.', params: [{ key: 'plate', label: 'Plate Hz', min: 200, max: 8000, def: 2000, step: 25 }, { key: 'q', label: 'Q', min: 0.3, max: 8, def: 0.7, step: 0.1 }], build(p) { const flt = new Tone.Filter({ type: 'notch', frequency: p.plate, Q: p.q }); const w = wetWrap(flt); return { node: w, set(np) { flt.frequency.rampTo(np.plate, 0.05); flt.Q.rampTo(np.q, 0.05); }, dispose() { w.dispose(); } }; } },
+
+        { id: 'khayyam', num: 31, name: 'Khayyam Cubic Waveshaper', group: 'SATURATION', blurb: 'Soft cubic saturation – tube warmth.', params: [{ key: 'drive', label: 'Drive', min: 0.2, max: 3, def: 1, step: 0.05 }], build(p) { const drive = new Tone.Gain(p.drive); const cheb = new Tone.Chebyshev({ order: 3 }); drive.connect(cheb); const w = wetWrap(drive, cheb); return { node: w, set(np) { drive.gain.rampTo(np.drive, 0.05); }, dispose() { w.dispose(); } }; } },
+        { id: 'staircase', num: 75, name: 'Energy‑Quantization Staircase', group: 'SATURATION', blurb: 'Bitcrush for lo‑fi grit.', params: [{ key: 'levels', label: 'Bits', min: 1, max: 8, def: 4, step: 1 }], build(p) { const fx = new Tone.BitCrusher({ bits: Math.max(1, Math.round(p.levels)) }); const w = nativeWrap(fx); return { node: w, set(np) { fx.bits.value = Math.max(1, Math.round(np.levels)); }, dispose() { w.dispose(); } }; } },
+        { id: 'tube_drive', num: 32, name: 'Tube Drive', group: 'SATURATION', blurb: 'Classic distortion drive.', params: [{ key: 'amount', label: 'Drive', min: 0, max: 1, def: 0.4, step: 0.01 }], build(p) { const fx = new Tone.Distortion({ distortion: p.amount, oversample: '4x' }); const w = nativeWrap(fx); return { node: w, set(np) { fx.distortion = np.amount; }, dispose() { w.dispose(); } }; } },
+
+        { id: 'phi_allpass', num: 3, name: 'Golden‑Ratio Widener', group: 'STEREO / IMAGING', blurb: 'Stereo widener, mono‑compatible.', params: [{ key: 'width', label: 'Width', min: 0, max: 1, def: 0.7, step: 0.01 }], build(p) { const fx = new Tone.StereoWidener({ width: p.width }); const w = nativeWrap(fx); return { node: w, set(np) { fx.width.rampTo(np.width, 0.05); }, dispose() { w.dispose(); } }; } },
+        { id: 'lorentz', num: 54, name: 'Lorentz‑Boost Width', group: 'STEREO / IMAGING', blurb: 'Stereo field expander.', params: [{ key: 'beta', label: 'Width', min: 0, max: 1, def: 0.6, step: 0.02 }], build(p) { const fx = new Tone.StereoWidener({ width: p.beta }); const w = nativeWrap(fx); return { node: w, set(np) { fx.width.rampTo(np.beta, 0.05); }, dispose() { w.dispose(); } }; } },
+        { id: 'bloch', num: 82, name: 'Qubit Bloch‑Sphere Panner', group: 'STEREO / IMAGING', blurb: 'Smooth auto‑panner.', params: [{ key: 'rate', label: 'Rate', min: 0.2, max: 6, def: 1, step: 0.1 }], build(p) { const fx = new Tone.AutoPanner({ frequency: p.rate, depth: 1 }).start(); const w = nativeWrap(fx); return { node: w, set(np) { fx.frequency.rampTo(np.rate, 0.05); }, dispose() { w.dispose(); } }; } },
+
+        { id: 'goldspiral', num: 44, name: 'Golden‑Spiral Reverb', group: 'REVERB / SPACE', blurb: 'Diffuse convolution reverb.', params: [{ key: 'tail', label: 'Decay s', min: 0.5, max: 8, def: 2, step: 0.1 }, { key: 'pre', label: 'Pre‑delay', min: 0, max: 0.1, def: 0.01, step: 0.005 }], build(p) { const fx = new Tone.Reverb({ decay: p.tail, preDelay: p.pre }); const w = nativeWrap(fx); return { node: w, rebuildOn: ['tail', 'pre'], set(np) {}, dispose() { w.dispose(); } }; } },
+        { id: 'platonic', num: 13, name: 'Platonic‑Solid Reverb', group: 'REVERB / SPACE', blurb: 'Short JC room.', params: [{ key: 'room', label: 'Room', min: 0, max: 1, def: 0.5, step: 0.01 }], build(p) { const fx = new Tone.JCReverb({ roomSize: p.room }); const w = nativeWrap(fx); return { node: w, set(np) { fx.roomSize.rampTo(np.room, 0.1); }, dispose() { w.dispose(); } }; } },
+        { id: 'brahma', num: 36, name: 'Brahmagupta Freeverb', group: 'REVERB / SPACE', blurb: 'Schroeder/Freeverb tail.', params: [{ key: 'room', label: 'Room', min: 0, max: 1, def: 0.7, step: 0.01 }, { key: 'damp', label: 'Damp Hz', min: 200, max: 8000, def: 3000, step: 50 }], build(p) { const fx = new Tone.Freeverb({ roomSize: p.room, dampening: p.damp }); const w = nativeWrap(fx); return { node: w, set(np) { fx.roomSize.rampTo(np.room, 0.1); fx.dampening.rampTo(np.damp, 0.1); }, dispose() { w.dispose(); } }; } },
+        { id: 'schwarz', num: 63, name: 'Schwarzschild Reverb', group: 'REVERB / SPACE', blurb: 'Long controllable‑decay tail.', params: [{ key: 'tail', label: 'Decay s', min: 1, max: 12, def: 4, step: 0.2 }], build(p) { const fx = new Tone.Reverb({ decay: p.tail, preDelay: 0.02 }); const w = nativeWrap(fx); return { node: w, rebuildOn: ['tail'], set(np) {}, dispose() { w.dispose(); } }; } },
+
+        { id: 'logphaser', num: 7, name: 'Logarithmic Spiral Phaser', group: 'MODULATION', blurb: 'Phaser with log‑spaced notches.', params: [{ key: 'rate', label: 'Rate', min: 0.1, max: 8, def: 1.5, step: 0.05 }, { key: 'base', label: 'Base Hz', min: 80, max: 600, def: 150, step: 5 }, { key: 'q', label: 'Q', min: 1, max: 12, def: 5, step: 0.5 }], build(p) { const fx = new Tone.Phaser({ frequency: p.rate, baseFrequency: p.base, Q: p.q, octaves: 3 }); const w = nativeWrap(fx); return { node: w, set(np) { fx.frequency.rampTo(np.rate, 0.05); fx.baseFrequency = np.base; fx.Q.rampTo(np.q, 0.05); }, dispose() { w.dispose(); } }; } },
+        { id: 'doppler', num: 51, name: 'Relativistic Doppler Chorus', group: 'MODULATION', blurb: 'Delay‑mod chorus/flanger.', params: [{ key: 'depth', label: 'Depth', min: 0, max: 1, def: 0.6, step: 0.02 }, { key: 'rate', label: 'Rate', min: 0.1, max: 6, def: 1, step: 0.1 }], build(p) { const fx = new Tone.Chorus({ frequency: p.rate, delayTime: 4, depth: p.depth, spread: 180 }).start(); const w = nativeWrap(fx); return { node: w, set(np) { fx.frequency.rampTo(np.rate, 0.05); fx.depth = np.depth; }, dispose() { w.dispose(); } }; } },
+        { id: 'redshift', num: 65, name: 'Cosmological‑Redshift Vibrato', group: 'MODULATION', blurb: 'Tape wow / slow warble.', params: [{ key: 'rate', label: 'Rate', min: 0.1, max: 8, def: 0.5, step: 0.1 }, { key: 'depth', label: 'Depth', min: 0, max: 1, def: 0.3, step: 0.02 }], build(p) { const fx = new Tone.Vibrato({ frequency: p.rate, depth: p.depth }); const w = nativeWrap(fx); return { node: w, set(np) { fx.frequency.rampTo(np.rate, 0.05); fx.depth.rampTo(np.depth, 0.05); }, dispose() { w.dispose(); } }; } },
+
+        { id: 'archimedes', num: 6, name: 'Archimedean Auto‑Filter', group: 'MOVEMENT', blurb: 'Auto‑filter / slow wah.', params: [{ key: 'rate', label: 'Rate', min: 0.02, max: 8, def: 0.5, step: 0.02 }, { key: 'depth', label: 'Depth', min: 0, max: 1, def: 0.7, step: 0.02 }, { key: 'center', label: 'Center Hz', min: 200, max: 3000, def: 800, step: 25 }], build(p) { const fx = new Tone.AutoFilter({ frequency: p.rate, depth: p.depth, baseFrequency: p.center, octaves: 2.5 }).start(); const w = nativeWrap(fx); return { node: w, set(np) { fx.frequency.rampTo(np.rate, 0.05); fx.depth.rampTo(np.depth, 0.05); fx.baseFrequency = np.center; }, dispose() { w.dispose(); } }; } },
+        { id: 'euclid', num: 8, name: 'Euclidean Tremolo Gate', group: 'MOVEMENT', blurb: 'Rhythmic trance gate.', params: [{ key: 'rate', label: 'Rate', min: 0.5, max: 16, def: 8, step: 0.5 }, { key: 'depth', label: 'Depth', min: 0, max: 1, def: 1, step: 0.02 }], build(p) { const fx = new Tone.Tremolo({ frequency: p.rate, depth: p.depth, spread: 0 }).start(); const w = nativeWrap(fx); return { node: w, set(np) { fx.frequency.rampTo(np.rate, 0.05); fx.depth.rampTo(np.depth, 0.05); }, dispose() { w.dispose(); } }; } },
+        { id: 'crt', num: 41, name: 'Chinese‑Remainder Auto‑Wah', group: 'MOVEMENT', blurb: 'Envelope‑following wah.', params: [{ key: 'base', label: 'Base Hz', min: 50, max: 600, def: 100, step: 10 }, { key: 'sens', label: 'Sensitivity', min: -40, max: 0, def: -20, step: 1 }], build(p) { const fx = new Tone.AutoWah({ baseFrequency: p.base, octaves: 4, sensitivity: p.sens }); const w = nativeWrap(fx); return { node: w, set(np) { fx.baseFrequency = np.base; fx.sensitivity = np.sens; }, dispose() { w.dispose(); } }; } }
+    ];
+
+
+
+    /* ========== AUDIO GRAPH — PURE TONE.JS ==========
+     * Everything in the signal path is a Tone.js node. No raw Web Audio, no
+     * native AudioContext access, no Tone<->native boundary. Connections use
+     * Tone's own .connect(), and effect wrappers expose ._in / ._out (Tone
+     * nodes) so the chain builder can wire them uniformly.
+     */
+    let chainCounter = 0;
+    // Live Tone-node bundles keyed by effect uid, kept OUTSIDE Pinia so Vue never
+    // deep-proxies Tone nodes (proxying corrupts Tone's internal node identity).
+    const chainDataByUid = {};
+    const audioGraph = {
+        players: {}, trackChannels: {}, busInputs: {}, buses: {},
+        masterOut: null, meter: null, fft: null, recorder: null, channelChains: {}
+    };
+
+    // Connect helper that understands our effect-wrapper objects (which carry
+    // ._in / ._out) as well as plain Tone nodes. Pure Tone .connect() throughout.
+    function toneConnect(source, dest) {
+        if (!source || !dest) return;
+        const s = (source && source._out) ? source._out : source;
+        const d = (dest && dest._in) ? dest._in : dest;
+        try { s.connect(d); }
+        catch (e) { console.warn('toneConnect failed:', e); }
+    }
+    function toneDisconnect(node) {
+        if (!node) return;
+        const n = (node && node._out) ? node._out : node;
+        try { n.disconnect(); } catch (e) {}
+    }
+
+    /* ========== PINIA STORE IMPLEMENTATION ========== */
+    const useAudioStore = defineStore('audioStore', {
+        state: () => ({
+            isPlaying: false,
+            isExporting: false,
+            tracks: Array.from({ length: 6 }, (_, i) => ({
+                id: `trk_${Date.now()}_${i}`, name: `Track ${i + 1}`, loaded: false, muted: false, soloed: false,
+                volume: 0, pan: 0, bus: 'master'
+            })),
+            channels: [
+                { id: `ch_${Date.now()}_1`, name: 'FX BUS 1', volume: 0, muted: false, soloed: false, chain: [] },
+                { id: `ch_${Date.now()}_2`, name: 'FX BUS 2', volume: 0, muted: false, soloed: false, chain: [] },
+                { id: 'master', name: 'MASTER OUT', volume: 0, muted: false, soloed: false, chain: [] }
+            ],
+            selectedChannelId: 'master'
+        }),
+        getters: {
+            selectedChannelObj: (state) => state.channels.find(c => c.id === state.selectedChannelId)
+        },
+        actions: {
+            async initAudio() {
+                if(audioGraph.masterOut) return;
+                await Tone.start();
+                
+                this.channels.forEach(ch => {
+                    audioGraph.busInputs[ch.id] = new Tone.Gain(1);
+                    audioGraph.buses[ch.id] = new Tone.Channel({ volume: ch.volume, mute: ch.muted });
+                });
+                
+                audioGraph.masterOut = new Tone.Volume(0).toDestination();
+                audioGraph.meter = new Tone.Meter({ smoothing: 0.85 });
+                audioGraph.fft = new Tone.FFT(64);
+                audioGraph.recorder = new Tone.Recorder();
+                
+                audioGraph.masterOut.connect(audioGraph.meter);
+                audioGraph.masterOut.connect(audioGraph.fft);
+                audioGraph.masterOut.connect(audioGraph.recorder);
+
+                // Form the bus -> master -> destination path immediately so the
+                // visualizer's fft/meter taps are live and master output works
+                // before any user interaction triggers a later rebuild.
+                this.rebuildGraph();
+            },
+            async togglePlayback() {
+                if (!audioGraph.masterOut) await this.initAudio();
+                this.isPlaying = !this.isPlaying;
+                Object.values(audioGraph.players).forEach(p => { 
+                    if (p.loaded) this.isPlaying ? p.start() : p.stop(); 
+                });
+            },
+            async toggleExport() {
+                if (!audioGraph.masterOut) await this.initAudio();
+                if (!this.isExporting) { 
+                    audioGraph.recorder.start(); 
+                    this.isExporting = true; 
+                    if (!this.isPlaying) this.togglePlayback(); 
+                } else { 
+                    const recording = await audioGraph.recorder.stop(); 
+                    this.isExporting = false; 
+                    const anchor = document.createElement("a"); 
+                    anchor.download = "Master_Render.wav"; 
+                    anchor.href = URL.createObjectURL(recording); 
+                    anchor.click(); 
+                }
+            },
+            addTrack() {
+                this.tracks.push({
+                    id: `trk_${Date.now()}`, name: `Track ${this.tracks.length + 1}`, loaded: false,
+                    muted: false, soloed: false, volume: 0, pan: 0, bus: 'master'
+                });
+            },
+            deleteTrack(trackId) {
+                if (audioGraph.players[trackId]) { audioGraph.players[trackId].dispose(); delete audioGraph.players[trackId]; }
+                if (audioGraph.trackChannels[trackId]) { audioGraph.trackChannels[trackId].dispose(); delete audioGraph.trackChannels[trackId]; }
+                this.tracks = this.tracks.filter(t => t.id !== trackId);
+                this.rebuildGraph();
+            },
+            async importTrack(e, trackId) {
+                if (!audioGraph.masterOut) await this.initAudio();
+                const file = e.target && e.target.files && e.target.files[0];
+                if (!file) return;
+                
+                const track = this.tracks.find(t => t.id === trackId);
+                const url = URL.createObjectURL(file);
+                
+                if (audioGraph.players[trackId]) audioGraph.players[trackId].dispose();
+                if (audioGraph.trackChannels[trackId]) audioGraph.trackChannels[trackId].dispose();
+                
+                const player = new Tone.Player({ url: url, loop: true, onload: () => { if (this.isPlaying) player.start(); } });
+                const channel = new Tone.Channel({ volume: track.volume, pan: track.pan, mute: track.muted });
+                
+                audioGraph.players[trackId] = player;
+                audioGraph.trackChannels[trackId] = channel;
+                track.name = file.name;
+                track.loaded = true;
+                
+                this.rebuildGraph();
+                this.applySoloMuteState();
+            },
+            async addChannel() {
+                if (!audioGraph.masterOut) await this.initAudio();
+                const id = `ch_${Date.now()}`;
+                const masterIdx = this.channels.findIndex(c => c.id === 'master');
+                this.channels.splice(masterIdx, 0, { id, name: `FX BUS ${this.channels.length}`, volume: 0, muted: false, soloed: false, chain: [] });
+                audioGraph.busInputs[id] = new Tone.Gain(1);
+                audioGraph.buses[id] = new Tone.Channel({ volume: 0 });
+                this.rebuildGraph();
+            },
+            removeChannel(channelId) {
+                if (channelId === 'master') return;
+                this.tracks.forEach(t => { if (t.bus === channelId) t.bus = 'master'; });
+                this.disposeChannelChain(channelId);
+                
+                if (audioGraph.busInputs[channelId]) { audioGraph.busInputs[channelId].dispose(); delete audioGraph.busInputs[channelId]; }
+                if (audioGraph.buses[channelId]) { audioGraph.buses[channelId].dispose(); delete audioGraph.buses[channelId]; }
+                
+                this.channels = this.channels.filter(c => c.id !== channelId);
+                if (this.selectedChannelId === channelId) this.selectedChannelId = 'master';
+                this.rebuildGraph();
+            },
+            updateTrackParams(t) { 
+                const tc = audioGraph.trackChannels[t.id]; 
+                if (tc) { tc.volume.rampTo(t.volume, 0.1); tc.pan.rampTo(t.pan, 0.1); } 
+            },
+            toggleTrackMute(t) { 
+                t.muted = !t.muted; 
+                this.applySoloMuteState();
+            },
+            toggleTrackSolo(t) { 
+                t.soloed = !t.soloed; 
+                this.applySoloMuteState();
+            },
+            updateChannelParams(c) { 
+                const bc = audioGraph.buses[c.id]; 
+                if (bc) bc.volume.rampTo(c.volume, 0.1); 
+            },
+            toggleChannelMute(c) { 
+                c.muted = !c.muted; 
+                this.applySoloMuteState();
+            },
+            toggleChannelSolo(c) { 
+                c.soloed = !c.soloed; 
+                this.applySoloMuteState();
+            },
+            // Solo is implemented manually (not via Tone.Channel.solo) because Tone
+            // routes ALL solo'd channels to one global solo bus — soloing a track
+            // would then silence the FX buses and vice-versa. We scope solo within
+            // each layer (tracks among tracks, buses among buses) and fold the
+            // result into the effective mute on each Tone.Channel.
+            applySoloMuteState() {
+                const anyTrackSolo = this.tracks.some(t => t.soloed);
+                this.tracks.forEach(t => {
+                    const tc = audioGraph.trackChannels[t.id];
+                    if (!tc) return;
+                    tc.solo = false; // never use Tone's global solo bus
+                    tc.mute = t.muted || (anyTrackSolo && !t.soloed);
+                });
+                const buses = this.channels.filter(c => c.id !== 'master');
+                const anyBusSolo = buses.some(c => c.soloed);
+                buses.forEach(c => {
+                    const bc = audioGraph.buses[c.id];
+                    if (!bc) return;
+                    bc.solo = false;
+                    bc.mute = c.muted || (anyBusSolo && !c.soloed);
+                });
+                const masterBus = audioGraph.buses['master'];
+                const master = this.channels.find(c => c.id === 'master');
+                if (masterBus && master) { masterBus.solo = false; masterBus.mute = master.muted; }
+            },
+            disposeChannelChain(channelId) {
+                const data = audioGraph.channelChains[channelId];
+                if (!data) return;
+                data.forEach(d => {
+                    try { d.node && d.node.disconnect(); } catch (e) {}
+                    try { d.inst && d.inst.dispose && d.inst.dispose(); } catch (e) {}
+                    if (d.item) delete chainDataByUid[d.item.uid];
+                });
+                delete audioGraph.channelChains[channelId];
+            },
+            buildChannelChain(channelId) {
+                if (!audioGraph.busInputs[channelId] || !audioGraph.buses[channelId]) return;
+                this.disposeChannelChain(channelId);
+                const ch = this.channels.find(c => c.id === channelId);
+
+                const busIn = audioGraph.busInputs[channelId];
+                const bus = audioGraph.buses[channelId];
+                busIn.disconnect();
+
+                if (!ch || !ch.chain.length) {
+                    // No effects: bus input feeds the bus Channel directly.
+                    busIn.connect(bus);
+                    audioGraph.channelChains[channelId] = [];
+                    return;
+                }
+
+                const chainData = [];
+                let prev = busIn; // a Tone node (Tone.Gain)
+                for (const item of ch.chain) {
+                    const def = EFFECTS.find(e => e.id === item.defId);
+                    if (!def) continue;
+
+                    let inst, node;
+                    try {
+                        inst = def.build({ ...item.params }); // pure Tone build
+                        node = inst && inst.node;             // wrapper with _in/_out/wet
+                        if (!node || !node._in || !node._out) throw new Error('effect build returned no node');
+                    } catch (err) {
+                        // A single failing effect must not break the rest of the chain
+                        // or silence the channel. Skip it and keep wiring the others.
+                        console.error(`Effect "${item.defId}" failed to build; skipping it.`, err);
+                        continue;
+                    }
+
+                    // Apply current wet/bypass to the wrapper's wet control.
+                    if (node.wet) {
+                        const wetVal = item.bypass ? 0 : item.wet;
+                        if (typeof node.wet.rampTo === 'function') node.wet.rampTo(wetVal, 0.02);
+                        else node.wet.value = wetVal;
+                    }
+
+                    const d = { item, node, inst };
+                    chainData.push(d);
+                    // Live Tone nodes kept off the reactive store.
+                    chainDataByUid[item.uid] = d;
+
+                    toneConnect(prev, node); // prev._out (or prev) -> node._in
+                    prev = node;
+                }
+
+                toneConnect(prev, bus); // last effect -> bus Channel
+                audioGraph.channelChains[channelId] = chainData;
+            },
+            rebuildGraph() {
+                if (!audioGraph.masterOut) return;
+
+                this.tracks.forEach(t => {
+                    if (t.loaded) {
+                        const p = audioGraph.players[t.id];
+                        const tc = audioGraph.trackChannels[t.id];
+                        const targetBus = audioGraph.busInputs[t.bus] || audioGraph.busInputs['master'];
+                        if (p && tc && targetBus) {
+                            p.disconnect(); tc.disconnect();
+                            p.connect(tc);          // Player -> track Channel (Tone)
+                            tc.connect(targetBus);  // track Channel -> bus input Gain (Tone)
+                        }
+                    }
+                });
+
+                this.channels.forEach(ch => this.buildChannelChain(ch.id));
+                this.channels.forEach(ch => {
+                    const bus = audioGraph.buses[ch.id];
+                    bus.disconnect();
+                    if (ch.id !== 'master') bus.connect(audioGraph.busInputs['master']);
+                    else bus.connect(audioGraph.masterOut);
+                });
+            },
+            async addEffectToChannel(def) {
+                if (!audioGraph.masterOut) await this.initAudio();
+                const ch = this.selectedChannelObj;
+                if (!ch) return;
+                ch.chain.push({
+                    uid: ++chainCounter,
+                    defId: def.id,
+                    params: Object.fromEntries(def.params.map(p => [p.key, p.def])),
+                    bypass: false,
+                    wet: 1.0
+                });
+                this.rebuildGraph();
+            },
+            async removeEffectFromChannel(uid) {
+                if (!audioGraph.masterOut) await this.initAudio();
+                const ch = this.selectedChannelObj;
+                if (!ch) return;
+                const idx = ch.chain.findIndex(c => c.uid === uid);
+                if (idx >= 0) ch.chain.splice(idx, 1);
+                this.rebuildGraph();
+            },
+            setWetForItem(item, v) {
+                item.wet = v;
+                const d = chainDataByUid[item.uid];
+                if (d && d.node && d.node.wet && !item.bypass) {
+                    if (typeof d.node.wet.rampTo === 'function') d.node.wet.rampTo(v, 0.02);
+                    else d.node.wet.value = v;
+                }
+            },
+            toggleBypassForItem(item) {
+                item.bypass = !item.bypass;
+                const d = chainDataByUid[item.uid];
+                if (d && d.node && d.node.wet) {
+                    const wetVal = item.bypass ? 0 : item.wet;
+                    if (typeof d.node.wet.rampTo === 'function') d.node.wet.rampTo(wetVal, 0.02);
+                    else d.node.wet.value = wetVal;
+                }
+            },
+            onParam(item, key, value) {
+                item.params[key] = value;
+                const d = chainDataByUid[item.uid];
+                const inst = d && d.inst;
+                if (!inst) return;
+                if ((inst.rebuildOn || []).includes(key)) {
+                    this.rebuildGraph();
+                } else if (inst.set) {
+                    inst.set({ ...item.params });
+                }
+            },
+            async reorderEffect(channelId, fromUid, toUid) {
+                if (!audioGraph.masterOut) await this.initAudio(); // Initialize audio if rack is clicked first
+                const ch = this.channels.find(c => c.id === channelId);
+                if (!ch) return;
+                const from = ch.chain.findIndex(c => c.uid === fromUid);
+                const to = ch.chain.findIndex(c => c.uid === toUid);
+                if(from < 0 || to < 0) return;
+                
+                const [moved] = ch.chain.splice(from, 1);
+                ch.chain.splice(to, 0, moved);
+                this.rebuildGraph();
+            }
+        }
+    });
+
+    /* ========== VUE COMPONENT: MIXER PAGE ========== */
+    const MixerPage = {
+        template: '#mixer-page',
+        setup() {
+            const store = useAudioStore();
+            const { isPlaying, isExporting, tracks, channels, selectedChannelId, selectedChannelObj } = storeToRefs(store);
+
+            // Palette derived from static dict
+            const rackGroups = ['TONAL / EQ', 'SATURATION', 'STEREO / IMAGING', 'REVERB / SPACE', 'MODULATION', 'MOVEMENT'];
+            const palette = computed(() => {
+                const m = {};
+                for (const g of rackGroups) m[g] = EFFECTS.filter(e => e.group === g);
+                return m;
+            });
+            const defOf = (item) => EFFECTS.find(e => e.id === item.defId);
+
+            // UI Only State
+            const mainCanvas = ref(null);
+            let drawFrame;
+            const dragId = ref(null);
+            const dropId = ref(null);
+
+            // Drag and Drop Effects
+            function onDragStart(uid) { dragId.value = uid; }
+            function onDragOver(uid, e) { e.preventDefault(); dropId.value = uid; }
+            function onDrop(uid) {
+                if (dragId.value == null || dragId.value === uid) { dragId.value = null; dropId.value = null; return; }
+                store.reorderEffect(selectedChannelId.value, dragId.value, uid);
+                dragId.value = null; dropId.value = null;
+            }
+            function onDragEnd() { dragId.value = null; dropId.value = null; }
+
+            // Knob Interaction Layer (UI side -> dispatches to store)
+            const knobNorm = (item, p) => (item.params[p.key] - p.min) / (p.max - p.min);
+            const fmt = (item, p) => {
+                const v = item.params[p.key];
+                if (p.max - p.min >= 100) return Math.round(v);
+                if (v < 1) return v.toFixed(p.step && p.step < 0.01 ? 4 : 2);
+                return v.toFixed(p.step && p.step < 1 ? 2 : 0);
+            };
+
+            function knobDrag(item, p, e) {
+                e.preventDefault();
+                const startY = (e.touches ? e.touches[0].clientY : e.clientY);
+                const startVal = item.params[p.key];
+                const range = p.max - p.min;
+                function move(ev) {
+                    const y = (ev.touches ? ev.touches[0].clientY : ev.clientY);
+                    const dy = startY - y;
+                    let v = startVal + (dy / 180) * range;
+                    v = Math.max(p.min, Math.min(p.max, v));
+                    if (p.step) v = Math.round(v / p.step) * p.step;
+                    store.onParam(item, p.key, v);
+                }
+                function up() { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); window.removeEventListener('touchmove', move); window.removeEventListener('touchend', up); }
+                window.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
+                window.addEventListener('touchmove', move, { passive: false }); window.addEventListener('touchend', up);
+            }
+
+            function knobDragWet(item, e) {
+                e.preventDefault();
+                const startY = (e.touches ? e.touches[0].clientY : e.clientY);
+                const startVal = item.wet;
+                function move(ev) {
+                    const y = (ev.touches ? ev.touches[0].clientY : ev.clientY);
+                    const dy = startY - y;
+                    let v = Math.max(0, Math.min(1, startVal + dy / 180));
+                    store.setWetForItem(item, v);
+                }
+                function up() { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); window.removeEventListener('touchmove', move); window.removeEventListener('touchend', up); }
+                window.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
+                window.addEventListener('touchmove', move, { passive: false }); window.addEventListener('touchend', up);
+            }
+
+            // Visualizer (Accesses module-scoped audioGraph proxy-free)
+            const startVisualizer = () => {
+                const cvs = mainCanvas.value; if (!cvs) return;
+                const ctx2d = cvs.getContext('2d');
+                const draw = () => {
+                    if (!mainCanvas.value) { drawFrame = requestAnimationFrame(draw); return; }
+                    const dpr = window.devicePixelRatio || 1; const rect = cvs.parentElement.getBoundingClientRect();
+                    if (cvs.width !== Math.floor(rect.width * dpr)) { cvs.width = Math.floor(rect.width * dpr); cvs.height = Math.floor(rect.height * dpr); }
+                    const w = cvs.width; const h = cvs.height;
+                    ctx2d.clearRect(0, 0, w, h);
+                    let fftVals = new Float32Array(64); fftVals.fill(-100); let rms = -60;
+                    
+                    if (audioGraph.fft && audioGraph.meter) {
+                        rms = audioGraph.meter.getValue();
+                        const vals = audioGraph.fft.getValue();
+                        for (let i = 0; i < vals.length; i++) { if (isFinite(vals[i])) fftVals[i] = vals[i]; }
+                    }
+                    
+                    ctx2d.beginPath(); ctx2d.fillStyle = 'rgba(6, 182, 212, 0.15)'; ctx2d.strokeStyle = '#06b6d4'; ctx2d.lineWidth = 2 * dpr;
+                    ctx2d.moveTo(0, h);
+                    for (let i = 0; i < fftVals.length; i++) {
+                        const normalized = Math.max(0, (fftVals[i] + 80) / 80);
+                        ctx2d.lineTo((i / fftVals.length) * w, h - (normalized * h));
+                    }
+                    ctx2d.lineTo(w, h); ctx2d.fill(); ctx2d.stroke();
+                    
+                    const rmsNormal = Math.max(0, (rms + 60) / 66); const barW = 12 * dpr;
+                    ctx2d.fillStyle = rmsNormal > 0.9 ? '#ef4444' : '#10b981';
+                    ctx2d.fillRect(w - barW - 5, h - (rmsNormal * h), barW, rmsNormal * h);
+                    drawFrame = requestAnimationFrame(draw);
+                };
+                draw();
+            };
+
+            onMounted(() => {
+                startVisualizer();
+            });
+
+            onUnmounted(() => { 
+                if (drawFrame) cancelAnimationFrame(drawFrame); 
+                Tone.Transport.stop(); 
+            });
+
+            /* IMPORTANT FIX: 
+             * Wrap all store actions to preserve Pinia's internal `this` context binding! 
+             * Otherwise Vue strips the context off destructured functions and updates fail silently.
+             */
+            return {
+                isPlaying, isExporting, mainCanvas, tracks, channels, selectedChannelId, selectedChannelObj,
+                rackGroups, palette, dragId, dropId, defOf,
+                
+                addTrack: () => store.addTrack(),
+                importTrack: (e, id) => store.importTrack(e, id),
+                deleteTrack: (id) => store.deleteTrack(id),
+                updateTrackParams: (t) => store.updateTrackParams(t),
+                toggleTrackMute: (t) => store.toggleTrackMute(t),
+                toggleTrackSolo: (t) => store.toggleTrackSolo(t),
+                
+                addChannel: () => store.addChannel(),
+                removeChannel: (id) => store.removeChannel(id),
+                updateChannelParams: (c) => store.updateChannelParams(c),
+                toggleChannelMute: (c) => store.toggleChannelMute(c),
+                toggleChannelSolo: (c) => store.toggleChannelSolo(c),
+                
+                togglePlayback: () => store.togglePlayback(),
+                toggleExport: () => store.toggleExport(),
+                rebuildGraph: () => store.rebuildGraph(),
+                
+                addEffectToChannel: (def) => store.addEffectToChannel(def),
+                removeEffectFromChannel: (uid) => store.removeEffectFromChannel(uid),
+                setWetForItem: (item, v) => store.setWetForItem(item, v),
+                toggleBypassForItem: (item) => store.toggleBypassForItem(item),
+                
+                knobDrag, knobDragWet, knobNorm, fmt,
+                onDragStart, onDragOver, onDrop, onDragEnd
+            };
+        }
+    };
+
+    /* ========== VUE ROUTER ========== */
+    const routes = [
+        { path: '/', component: MixerPage }
+    ];
+
+    const router = createRouter({
+        history: createWebHashHistory(), // Safe history mode for sandboxes/local files without server configuration
+        routes
+    });
+
+    /* ========== VUE APP INSTANTIATION ========== */
+    const app = createApp({});
+    const pinia = createPinia();
+    
+    app.use(pinia);
+    app.use(router); // Attach Router
+    app.component('Slider', VueformSlider);
+    
+    app.mount('#app');
+</script>
+</body>
+</html>

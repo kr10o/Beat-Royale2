@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "beat-royale-studio",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-10-30",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": { "BATTLE_PLAYERS": "50", "BATTLE_PREP_MS": "60000", "BATTLE_ROUND_MS": "60000", "BATTLE_CLIP_MS": "4000", "GOOGLE_CLIENT_ID": "170891542968-rni36aflb2s8ma1ava0lunprbf03g02s.apps.googleusercontent.com" },
+  "routes": [{ "pattern": "beat-battle-royale.com", "custom_domain": true }],
+  "assets": { "directory": "./dist", "binding": "ASSETS", "run_worker_first": ["/api/*"] },
+  "d1_databases": [{ "binding": "RANKED_DB", "database_name": "beat-royale-ranked", "database_id": "4c8e960b-bc23-4bba-88ee-831ff27ba81e", "migrations_dir": "migrations" }],
+  "durable_objects": { "bindings": [{ "name": "LOBBIES", "class_name": "BeatRoyaleLobby" }, { "name": "RANKED", "class_name": "RankedArena" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["BeatRoyaleLobby"] }, { "tag": "v2", "new_sqlite_classes": ["RankedArena"] }],
+  "observability": { "enabled": true, "redact_query_string": true }
+}

@@ -1,0 +1,1305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0a0a0a">
+  <title>BEAT ROYALE SYNTHESIZER</title>
+
+  <!-- Vue 3 & Tailwind -->
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            blue: {
+              400: '#6f8aaa', 500: '#5a7493', 600: '#4b5f78', 700: '#3f4e60',
+              800: '#333e4d', 900: '#28303b', 950: '#191e25'
+            }
+          }
+        }
+      }
+    };
+  </script>
+  <!-- Tone.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+
+  <style>
+    input[type=range] {
+      -webkit-appearance: none;
+      background: transparent;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 8px;
+      height: 16px;
+      background: currentColor;
+      border-radius: 2px;
+      cursor: pointer;
+      box-shadow: 0 0 4px rgba(0,0,0,0.5);
+    }
+    input[type=range]:active::-webkit-slider-thumb {
+      background: #fff;
+    }
+
+    .knob-slider::-webkit-slider-thumb {
+      width: 12px; height: 12px; border-radius: 50%;
+    }
+
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #0a0a0a; }
+    ::-webkit-scrollbar-thumb { background: #262626; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #404040; }
+
+    .synth-panel {
+      background: linear-gradient(180deg, #161a1f 0%, #0d0f12 100%);
+      box-shadow: inset 0 1px 1px rgba(255,255,255,0.05), 0 4px 6px rgba(0,0,0,0.3);
+    }
+    
+    .screen-bg {
+      background: radial-gradient(circle at center, #1a2026 0%, #0d1013 100%);
+    }
+
+    .key-white { background: #e5e5e5; border: 1px solid #999; border-top: none; border-bottom-left-radius: 3px; border-bottom-right-radius: 3px; }
+    .key-white:active, .key-white.active { background: #d4d4d4; }
+    .key-black { background: #1a1a1a; border: 1px solid #000; border-bottom-left-radius: 2px; border-bottom-right-radius: 2px; z-index: 10; margin-left: -4%; margin-right: -4%; width: 8%; height: 65%; box-shadow: inset 0 -2px 2px rgba(255,255,255,0.2); }
+    .key-black:active, .key-black.active { background: #2a2a2a; }
+  </style>
+</head>
+<body class="bg-black text-neutral-300 overflow-hidden font-sans h-screen w-screen flex flex-col select-none">
+
+  <div id="app" class="h-full flex flex-col"></div>
+
+  <script>
+    const { createApp, ref, reactive, onMounted, onUnmounted, watch } = Vue;
+
+    const App = {
+      setup() {
+        const isAudioReady = ref(false);
+        const isLoading = ref(false);
+        const isRecording = ref(false);
+        const activeTab = ref('OSC');
+
+        const presetName = ref('Hyperion Arp [Init]');
+        const presetInput = ref(null);
+        const sampleInputA = ref(null);
+        const sampleInputB = ref(null);
+        const sampleNameA = ref('Init Wave.wav');
+        const sampleNameB = ref('Init Wave.wav');
+
+        // --- SYNTH STATE ---
+        const synthState = reactive({
+          masterVol: -6,
+          polyphony: 8,
+          glide: 0,
+          swellEnabled: true,
+          masterFx: {
+            compThresh: -12,
+            limitThresh: -1
+          },
+          oscA: {
+            on: true, type: 'Wavetable',
+            wtPos: 50, warp: 0, fm: 0, phase: 0,
+            coarse: 0, fine: 0,
+            unison: 3, detune: 0.1, pan: 0, level: 80,
+            granSize: 50, granDens: 50,
+            specFormant: 0, specSmear: 20,
+            sampStart: 0, sampEnd: 100,
+            multiSpread: 50, multiCurve: 50
+          },
+          oscB: {
+            on: false, type: 'Wavetable',
+            wtPos: 20, warp: 10, fm: 0, phase: 180,
+            coarse: -12, fine: 0,
+            unison: 1, detune: 0.05, pan: 0, level: 0,
+            granSize: 50, granDens: 50,
+            specFormant: 0, specSmear: 20,
+            sampStart: 0, sampEnd: 100,
+            multiSpread: 50, multiCurve: 50
+          },
+          sub: { on: false, shape: 'sine', oct: -1, level: 50 },
+          noise: { on: false, color: 'white', level: 0 },
+          filter: {
+            on: true, type: 'lowpass',
+            cutoff: 2000, res: 2, drive: 0,
+            envAmt: 50, keytrack: 50, pan: 0
+          },
+          env1: { a: 0.01, d: 0.3, s: 0.5, r: 0.8 },
+          env2: { a: 0.1, d: 0.5, s: 0.2, r: 0.5 },
+          lfo1: { rate: 2, depth: 50, shape: 'sine', delay: 0 },
+          lfo2: { rate: 0.5, depth: 30, shape: 'triangle', delay: 0.5 },
+          fx: {
+            dstDrive: 0.5, dstTone: 0.8, dstWet: 0,
+            choDepth: 0.5, choRate: 0.2, choWet: 0,
+            dlyTime: 0.4, dlyFeed: 0.4, dlyCut: 2000, dlyWet: 0.1,
+            revSize: 0.8, revDecay: 2.5, revDamp: 4000, revWet: 0.2
+          }
+        });
+
+        const oscTypes = ['Wavetable', 'Multisample', 'Sample', 'Granular', 'Spectral'];
+        const notes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+        const keyboardKeys = [];
+        for (let oct = 3; oct <= 5; oct++) {
+          notes.forEach(n => keyboardKeys.push({ note: n + oct, isBlack: n.includes('#') }));
+        }
+
+        const activeNotes = ref(new Set());
+        const metersCanvas = ref(null);
+        const oscAWaveCanvas = ref(null);
+        const oscBWaveCanvas = ref(null);
+        let drawFrame;
+
+        // --- AUDIO ENGINE ---
+        let polySynth, masterFilter, reverb, delay, dist, chorus;
+        let fftAnalyzer, rmsMeter, masterRecorder, expressionNode;
+        let masterLimiter, masterCompressor;
+        
+        // Expression tracking
+        let isPlayingAnyNote = false;
+        let globalMouseX = 0;
+        let globalMouseY = 0;
+        let activeKeyStartPos = null;
+        let expressionVol = 0; 
+        let expressionTarget = 0;
+
+        const initAudio = async () => {
+          isLoading.value = true;
+          await Tone.start();
+
+          // Master Dynamic Nodes
+          masterLimiter = new Tone.Limiter(synthState.masterFx.limitThresh).connect(Tone.Destination);
+          masterCompressor = new Tone.Compressor({
+            threshold: synthState.masterFx.compThresh,
+            ratio: 4,
+            attack: 0.01,
+            release: 0.1
+          }).connect(masterLimiter);
+
+          // Initialize Effects Chain (Connecting into Compressor -> Limiter)
+          reverb = new Tone.Reverb(synthState.fx.revDecay).connect(masterCompressor);
+          delay = new Tone.FeedbackDelay('8n', synthState.fx.dlyFeed).connect(reverb);
+          chorus = new Tone.Chorus(4, 2.5, synthState.fx.choDepth).connect(delay).start();
+          dist = new Tone.Distortion(synthState.fx.dstDrive).connect(chorus);
+          
+          masterFilter = new Tone.Filter(synthState.filter.cutoff, synthState.filter.type).connect(dist);
+          masterFilter.Q.value = synthState.filter.res;
+
+          // Expression Node (for dynamic piano roll volume control)
+          expressionNode = new Tone.Volume(0).connect(masterFilter);
+
+          fftAnalyzer = new Tone.FFT(64);
+          rmsMeter = new Tone.Meter({ smoothing: 0.85 });
+          masterRecorder = new Tone.Recorder();
+          
+          // Connect meters & recorder to master output post-limiter
+          masterLimiter.connect(rmsMeter);
+          masterLimiter.connect(fftAnalyzer);
+          masterLimiter.connect(masterRecorder);
+
+          polySynth = new Tone.PolySynth(Tone.Synth, {
+            oscillator: { type: 'fatsawtooth', count: 3, spread: 20 },
+            envelope: {
+              attack: synthState.env1.a, decay: synthState.env1.d,
+              sustain: synthState.env1.s, release: synthState.env1.r
+            }
+          }).connect(expressionNode);
+
+          polySynth.volume.value = synthState.masterVol;
+          updateFXMix();
+
+          isAudioReady.value = true;
+          isLoading.value = false;
+          
+          // Slight delay to ensure canvas refs are mounted before starting loop
+          setTimeout(startVisualizer, 100);
+        };
+
+        const updateEngineParams = () => {
+          if (!isAudioReady.value) return;
+          
+          polySynth.set({
+            envelope: { attack: synthState.env1.a, decay: synthState.env1.d, sustain: synthState.env1.s, release: synthState.env1.r }
+          });
+
+          masterFilter.frequency.rampTo(synthState.filter.cutoff, 0.1);
+          masterFilter.Q.value = synthState.filter.res;
+          masterFilter.type = synthState.filter.type;
+          
+          if (masterCompressor) masterCompressor.threshold.value = synthState.masterFx.compThresh;
+          if (masterLimiter) masterLimiter.threshold.value = synthState.masterFx.limitThresh;
+
+          updateFXMix();
+
+          let baseType = 'sawtooth';
+          if (synthState.oscA.type === 'Wavetable') baseType = synthState.oscA.wtPos > 50 ? 'square' : 'sawtooth';
+          if (synthState.oscA.type === 'Sample') baseType = 'sine';
+          if (synthState.oscA.type === 'Granular') baseType = 'triangle';
+          
+          const typeStr = synthState.oscA.unison > 1 ? `fat${baseType}` : baseType;
+          polySynth.set({ oscillator: { type: typeStr, count: synthState.oscA.unison, spread: synthState.oscA.detune * 100 } });
+        };
+
+        const updateFXMix = () => {
+          if (!reverb) return;
+          reverb.wet.value = synthState.fx.revWet;
+          delay.wet.value = synthState.fx.dlyWet;
+          dist.wet.value = synthState.fx.dstWet;
+          chorus.wet.value = synthState.fx.choWet;
+          dist.distortion = synthState.fx.dstDrive;
+          reverb.decay = synthState.fx.revDecay;
+          delay.feedback.value = synthState.fx.dlyFeed;
+          polySynth.volume.value = synthState.masterVol;
+        };
+
+        watch(synthState, updateEngineParams, { deep: true });
+
+        // --- KEYBOARD & EXPRESSION LOGIC ---
+        const onGlobalMouseMove = (e) => {
+           globalMouseX = e.clientX;
+           globalMouseY = e.clientY;
+        };
+
+        const playNote = (e, note) => {
+          if (!isAudioReady.value) return;
+          activeNotes.value.add(note);
+          isPlayingAnyNote = true;
+          if (e) {
+             activeKeyStartPos = { x: e.clientX, y: e.clientY };
+             if (synthState.swellEnabled) {
+                 expressionTarget = -12; 
+                 expressionVol = -12;
+                 if(expressionNode) expressionNode.volume.value = expressionVol;
+             } else {
+                 expressionTarget = 0;
+                 expressionVol = 0;
+                 if(expressionNode) expressionNode.volume.value = 0;
+             }
+          }
+          polySynth.triggerAttack(note, Tone.now());
+        };
+
+        const releaseNote = (note) => {
+          if (!isAudioReady.value) return;
+          activeNotes.value.delete(note);
+          if (activeNotes.value.size === 0) {
+             isPlayingAnyNote = false;
+             activeKeyStartPos = null;
+          }
+          polySynth.triggerRelease(note, Tone.now());
+        };
+
+        const onKeyMouseDown = (e, note) => playNote(e, note);
+        const onKeyMouseUp = (note) => releaseNote(note);
+        const onKeyMouseLeave = (note) => { if (activeNotes.value.has(note)) releaseNote(note); };
+        const onKeyMouseEnter = (e, note) => { if (e.buttons === 1) playNote(e, note); };
+
+        // --- RECORDING ---
+        const toggleRecord = async () => {
+          if (!isAudioReady.value) return;
+          if (!isRecording.value) {
+            masterRecorder.start();
+            isRecording.value = true;
+          } else {
+            const recording = await masterRecorder.stop();
+            const url = URL.createObjectURL(recording);
+            const anchor = document.createElement("a");
+            anchor.download = "BeatRoyale_Export.webm"; 
+            anchor.href = url;
+            anchor.click();
+            URL.revokeObjectURL(url);
+            isRecording.value = false;
+          }
+        };
+
+        // --- METERS VISUALIZER ---
+        const startVisualizer = () => {
+          const canvas = metersCanvas.value;
+          if (!canvas) return;
+          const ctx = canvas.getContext('2d');
+          
+          let peakDb = -60;
+          let integratedLufs = -60;
+
+          const draw = () => {
+            if (!metersCanvas.value) {
+               drawFrame = requestAnimationFrame(draw);
+               return;
+            }
+
+            // High-DPI Scaling logic
+            const dpr = window.devicePixelRatio || 1;
+            const rect = canvas.getBoundingClientRect();
+            if (canvas.width !== Math.floor(rect.width * dpr) || canvas.height !== Math.floor(rect.height * dpr)) {
+                canvas.width = Math.floor(rect.width * dpr);
+                canvas.height = Math.floor(rect.height * dpr);
+            }
+            
+            const w = canvas.width;
+            const h = canvas.height;
+            
+            ctx.clearRect(0, 0, w, h);
+
+            // 1. Process Expression Logic (Vertical Mouse Delta)
+            if (synthState.swellEnabled) {
+                if (isPlayingAnyNote && activeKeyStartPos) {
+                   const deltaY = activeKeyStartPos.y - globalMouseY; // Positive when moving UP
+                   expressionTarget = -12 + (deltaY * 0.2); 
+                   if (expressionTarget > 6) expressionTarget = 6;
+                   if (expressionTarget < -40) expressionTarget = -40;
+                   
+                   expressionVol += (expressionTarget - expressionVol) * 0.15;
+                   if(expressionNode) expressionNode.volume.value = expressionVol;
+                } else {
+                   expressionTarget = -40;
+                   expressionVol += (expressionTarget - expressionVol) * 0.2;
+                   if(expressionNode) expressionNode.volume.value = expressionVol;
+                }
+            } else {
+                expressionVol = 0;
+                expressionTarget = 0;
+                if(expressionNode) expressionNode.volume.value = 0;
+            }
+
+            // 2. Read Audio Levels (safely)
+            let currentRms = -60;
+            let currentPeak = -60;
+            let fftVals = null;
+            
+            try {
+                if (rmsMeter) currentRms = rmsMeter.getValue();
+                if (fftAnalyzer) {
+                    fftVals = fftAnalyzer.getValue();
+                    let max = -Infinity;
+                    for(let i=0; i<fftVals.length; i++) {
+                       if(isFinite(fftVals[i]) && fftVals[i] > max) max = fftVals[i];
+                    }
+                    if (max > -60) currentPeak = max;
+                }
+            } catch(e) {}
+            
+            // Smooth peaks and LUFS
+            if (currentPeak > peakDb) peakDb = currentPeak;
+            else peakDb -= 0.8; 
+            if (peakDb < -60) peakDb = -60;
+
+            // Fake LUFS integration for visualization (averaged RMS + slight peak weighting)
+            const targetLufs = currentRms > -50 ? currentRms + 3 : -60;
+            integratedLufs += (targetLufs - integratedLufs) * 0.05;
+
+            const rmsSmooth = isFinite(currentRms) ? Math.max(-60, Math.min(6, currentRms)) : -60;
+            const peakSmooth = isFinite(peakDb) ? Math.max(-60, Math.min(6, peakDb)) : -60;
+            const lufsSmooth = isFinite(integratedLufs) ? Math.max(-60, Math.min(6, integratedLufs)) : -60;
+
+            // --- LAYOUT CONSTANTS ---
+            const lufsCx = w * 0.16;
+            const centerCx = w * 0.48;
+            const peakCx = w * 0.78;
+            const rmsCx = w * 0.90;
+            const baseFont = 10 * dpr;
+
+            // Unified Readout Fonts & Positioning
+            const labelFont = `bold ${8 * dpr}px monospace`;
+            const readoutFont = `bold ${16 * dpr}px monospace`;
+            const labelY = h * 0.15;
+            const readoutY = h * 0.32;
+
+            const drawReadout = (x, val, label, color) => {
+                ctx.fillStyle = '#6b7280';
+                ctx.font = labelFont;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(label, x, labelY);
+
+                ctx.fillStyle = color;
+                ctx.font = readoutFont;
+                ctx.fillText(val.toFixed(1), x, readoutY);
+            };
+
+            // Draw Unified Digital Readouts
+            drawReadout(lufsCx, lufsSmooth, 'LUFS INT', '#a855f7');
+            drawReadout(centerCx, rmsSmooth, 'VU LEVEL', '#f87171');
+            drawReadout(peakCx, peakSmooth, 'PEAK dB', '#3b82f6');
+            drawReadout(rmsCx, rmsSmooth, 'RMS dB', '#10b981');
+
+
+            // --- HELPER: CIRCULAR LED BARS ---
+            const barMaxH = h * 0.45;
+            const barBaseY = h * 0.90;
+            
+            const mapDbToHeight = (db) => {
+                const normalized = (db + 60) / 66;
+                return Math.max(0, Math.min(1, normalized)) * barMaxH;
+            };
+
+            const drawCircularLedBar = (cx, dbValue, type) => {
+                const activeH = mapDbToHeight(dbValue);
+                const segments = 16;
+                const ledSpacing = 3 * dpr;
+                const ledH = barMaxH / segments;
+                const radius = Math.max(1, (ledH - ledSpacing) / 2);
+                
+                // Draw Dark Backing Slot
+                ctx.fillStyle = 'rgba(0,0,0,0.4)';
+                ctx.fillRect(cx - radius - 4*dpr, barBaseY - barMaxH - 4*dpr, (radius*2) + 8*dpr, barMaxH + 8*dpr);
+
+                for(let i=0; i<segments; i++) {
+                   const cy = barBaseY - (i * ledH) - radius - (ledSpacing/2);
+                   
+                   ctx.beginPath();
+                   ctx.arc(cx, cy, radius, 0, Math.PI*2);
+                   
+                   if ((i * ledH) < activeH) {
+                      if (i >= segments - 3) ctx.fillStyle = '#ef4444'; // Red
+                      else if (i >= segments - 6) ctx.fillStyle = '#f59e0b'; // Yellow
+                      else ctx.fillStyle = type === 'peak' ? '#3b82f6' : (type === 'lufs' ? '#a855f7' : '#10b981'); 
+                      
+                      ctx.shadowBlur = 4 * dpr;
+                      ctx.shadowColor = ctx.fillStyle;
+                   } else {
+                      ctx.fillStyle = '#1f2937';
+                      ctx.shadowBlur = 0;
+                   }
+                   ctx.fill();
+                }
+                ctx.shadowBlur = 0; // reset
+            };
+
+            // Draw LUFS and DB Bars
+            drawCircularLedBar(lufsCx, lufsSmooth, 'lufs');
+            drawCircularLedBar(peakCx, peakSmooth, 'peak');
+            drawCircularLedBar(rmsCx, rmsSmooth, 'rms');
+
+            // --- DRAW ANALOG VU METER (MIDDLE) ---
+            const vuCy = h * 0.95;
+            const vuRadius = Math.min(w * 0.18, h * 0.52);
+            
+            // Draw VU background arc
+            ctx.beginPath();
+            ctx.arc(centerCx, vuCy, vuRadius, Math.PI * 1.15, Math.PI * 1.85);
+            ctx.lineWidth = 6 * dpr;
+            ctx.strokeStyle = '#222';
+            ctx.stroke();
+
+            // Draw VU Ticks & Text
+            ctx.fillStyle = '#9ca3af';
+            ctx.font = `bold ${baseFont * 0.8}px monospace`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'bottom';
+
+            const tickValues = [-20, -10, -5, 0, 3];
+            for (let i = 0; i < tickValues.length; i++) {
+                const normalized = (tickValues[i] + 20) / 23; // -20 to +3 range
+                const angle = Math.PI * 1.15 + (normalized * (Math.PI * 0.7));
+                const isRed = tickValues[i] >= 0;
+                
+                // Tick
+                ctx.beginPath();
+                ctx.moveTo(centerCx + Math.cos(angle) * (vuRadius - 8 * dpr), vuCy + Math.sin(angle) * (vuRadius - 8 * dpr));
+                ctx.lineTo(centerCx + Math.cos(angle) * (vuRadius + 8 * dpr), vuCy + Math.sin(angle) * (vuRadius + 8 * dpr));
+                ctx.lineWidth = 2 * dpr;
+                ctx.strokeStyle = isRed ? '#ef4444' : '#d1d5db';
+                ctx.stroke();
+
+                // Text
+                if(i % 2 === 0 || tickValues[i] === 0) {
+                   const txtX = centerCx + Math.cos(angle) * (vuRadius - 18 * dpr);
+                   const txtY = vuCy + Math.sin(angle) * (vuRadius - 18 * dpr);
+                   ctx.fillStyle = isRed ? '#ef4444' : '#9ca3af';
+                   ctx.fillText(tickValues[i] > 0 ? `+${tickValues[i]}` : tickValues[i], txtX, txtY);
+                }
+            }
+
+            // Calculate Needle Angle (-40dB to +6dB)
+            const mapVuToAngle = (db) => {
+               const clamped = Math.max(-25, Math.min(3, db));
+               const normalized = (clamped + 25) / 28;
+               return Math.PI * 1.15 + (normalized * Math.PI * 0.7);
+            };
+            const needleAngle = mapVuToAngle(rmsSmooth);
+
+            // Draw Needle Drop Shadow
+            ctx.beginPath();
+            ctx.moveTo(centerCx + 4*dpr, vuCy + 4*dpr);
+            ctx.lineTo(centerCx + 4*dpr + Math.cos(needleAngle) * (vuRadius * 1.05), vuCy + 4*dpr + Math.sin(needleAngle) * (vuRadius * 1.05));
+            ctx.lineWidth = 3 * dpr;
+            ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+            ctx.stroke();
+
+            // Draw Needle
+            ctx.beginPath();
+            ctx.moveTo(centerCx, vuCy);
+            ctx.lineTo(centerCx + Math.cos(needleAngle) * (vuRadius * 1.05), vuCy + Math.sin(needleAngle) * (vuRadius * 1.05));
+            ctx.lineWidth = 2.5 * dpr;
+            ctx.strokeStyle = '#f87171'; // Bright red
+            ctx.stroke();
+
+            // Needle Base Pin
+            ctx.beginPath();
+            ctx.arc(centerCx, vuCy, 6 * dpr, 0, Math.PI * 2);
+            ctx.fillStyle = '#111';
+            ctx.fill();
+            ctx.lineWidth = 1 * dpr;
+            ctx.strokeStyle = '#444';
+            ctx.stroke();
+
+            // --- Draw Mini Oscillators FFT (Safely) ---
+            const drawMiniFFT = (cvsRef, color, isOn) => {
+              if (!cvsRef.value || !fftVals) return;
+              const cvs = cvsRef.value;
+              
+              if (cvs.width !== Math.floor(cvs.offsetWidth * dpr)) {
+                  cvs.width = Math.floor(cvs.offsetWidth * dpr);
+                  cvs.height = Math.floor(cvs.offsetHeight * dpr);
+              }
+              const mctx = cvs.getContext('2d');
+              const mw = cvs.width, mh = cvs.height;
+              mctx.clearRect(0,0,mw,mh);
+              
+              const mbw = mw / fftVals.length;
+              mctx.fillStyle = color;
+              for(let i=0; i<fftVals.length; i++) {
+                 let val = Math.max(0, (fftVals[i] + 100) / 100);
+                 if (!isOn || !isPlayingAnyNote) val = Math.random() * 0.05;
+                 const mbh = val * mh;
+                 mctx.fillRect(i * mbw, mh - mbh, mbw - 0.5, mbh);
+              }
+            };
+            
+            try {
+                drawMiniFFT(oscAWaveCanvas, 'rgba(96, 165, 250, 0.8)', synthState.oscA.on);
+                drawMiniFFT(oscBWaveCanvas, 'rgba(52, 211, 153, 0.8)', synthState.oscB.on);
+            } catch(e) {}
+
+            drawFrame = requestAnimationFrame(draw);
+          };
+          
+          draw();
+        };
+
+        onMounted(() => {
+          window.addEventListener('mousemove', onGlobalMouseMove);
+        });
+
+        onUnmounted(() => { 
+            window.removeEventListener('mousemove', onGlobalMouseMove);
+            if (drawFrame) cancelAnimationFrame(drawFrame); 
+        });
+
+        const savePreset = () => {
+          const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(synthState));
+          const downloadAnchorNode = document.createElement('a');
+          downloadAnchorNode.setAttribute("href", dataStr);
+          downloadAnchorNode.setAttribute("download", presetName.value + ".json");
+          document.body.appendChild(downloadAnchorNode);
+          downloadAnchorNode.click();
+          downloadAnchorNode.remove();
+        };
+
+        const triggerLoadPreset = () => { if (presetInput.value) presetInput.value.click(); };
+        const onPresetFile = (event) => {
+          const file = event.target.files[0];
+          if (!file) return;
+          const reader = new FileReader();
+          reader.onload = (e) => {
+            try {
+              const state = JSON.parse(e.target.result);
+              Object.assign(synthState, state);
+              presetName.value = file.name.replace('.json', '');
+            } catch (err) {
+              alert('Invalid preset file format.');
+            }
+          };
+          reader.readAsText(file);
+          event.target.value = '';
+        };
+
+        const triggerLoadSample = (osc) => {
+          if (osc === 'A' && sampleInputA.value) sampleInputA.value.click();
+          if (osc === 'B' && sampleInputB.value) sampleInputB.value.click();
+        };
+
+        const onSampleFile = (event, osc) => {
+          const file = event.target.files[0];
+          if (!file) return;
+          if (osc === 'A') sampleNameA.value = file.name;
+          if (osc === 'B') sampleNameB.value = file.name;
+          
+          const url = URL.createObjectURL(file);
+          new Tone.ToneAudioBuffer(url, (buffer) => {
+              console.log(`Loaded ${file.name} into memory buffer.`);
+          });
+          event.target.value = '';
+        };
+
+        return {
+          isAudioReady, isLoading, isRecording, initAudio, activeTab, synthState, oscTypes,
+          keyboardKeys, activeNotes, onKeyMouseDown, onKeyMouseUp, onKeyMouseLeave, onKeyMouseEnter,
+          metersCanvas, oscAWaveCanvas, oscBWaveCanvas,
+          presetName, presetInput, sampleInputA, sampleInputB, sampleNameA, sampleNameB,
+          savePreset, triggerLoadPreset, onPresetFile, triggerLoadSample, onSampleFile, toggleRecord
+        };
+      },
+
+      template: `
+        <div v-if="!isAudioReady" class="h-full w-full flex flex-col items-center justify-center space-y-6 screen-bg relative z-50">
+          <div class="w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4" v-if="isLoading"></div>
+          <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="text-blue-400 w-16 h-16">
+            <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+          </svg>
+          <h1 class="text-3xl font-black tracking-[0.4em] text-neutral-100 uppercase drop-shadow-lg">
+            BEAT ROYALE <span class="text-blue-500">SYNTH</span>
+          </h1>
+          <button @click="initAudio" :disabled="isLoading" class="mt-8 px-8 py-3 rounded-sm text-sm font-bold tracking-widest uppercase transition-all border border-blue-500/50 bg-blue-600/20 hover:bg-blue-500 hover:text-white text-blue-300 shadow-[0_0_20px_rgba(90,116,147,0.3)] hover:shadow-[0_0_30px_rgba(90,116,147,0.6)]">
+            {{ isLoading ? 'Loading Engine...' : 'Initialise Core' }}
+          </button>
+        </div>
+
+        <div v-else class="h-full w-full flex flex-col bg-[#080a0c] overflow-hidden text-neutral-300">
+          
+          <!-- HEADER -->
+          <header class="h-12 border-b border-neutral-800 bg-[#0d0f12] flex items-center justify-between px-4 shrink-0 shadow-md z-10">
+            <div class="flex items-center gap-3">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-blue-400 w-5 h-5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+              <h1 class="text-[11px] font-black tracking-[0.25em] text-neutral-200">BEAT ROYALE <span class="text-blue-500">SYNTH</span></h1>
+            </div>
+
+            <!-- PRESET BROWSER -->
+            <div class="flex-1 max-w-sm mx-8 flex items-center bg-black/50 border border-neutral-800 rounded-sm overflow-hidden shadow-inner">
+              <button @click="triggerLoadPreset" class="px-3 py-1.5 text-neutral-500 hover:text-white bg-neutral-900/50 hover:bg-neutral-800 border-r border-neutral-800 text-[8px] uppercase font-bold tracking-widest transition-colors">Load</button>
+              <div class="flex-1 text-center text-[10px] font-bold tracking-widest uppercase text-blue-200 cursor-pointer hover:text-white truncate px-2" title="Click to rename patch">{{ presetName }}</div>
+              <button @click="savePreset" class="px-3 py-1.5 text-neutral-500 hover:text-white bg-neutral-900/50 hover:bg-neutral-800 border-l border-neutral-800 text-[8px] uppercase font-bold tracking-widest transition-colors">Save</button>
+              <input type="file" accept=".json" @change="onPresetFile" ref="presetInput" class="hidden" />
+              <input type="file" accept="audio/*" @change="onSampleFile($event, 'A')" ref="sampleInputA" class="hidden" />
+              <input type="file" accept="audio/*" @change="onSampleFile($event, 'B')" ref="sampleInputB" class="hidden" />
+            </div>
+
+            <!-- GLOBAL CONTROLS -->
+            <div class="flex items-center gap-5">
+              
+              <!-- Record Button -->
+              <button @click="toggleRecord" :class="['flex items-center gap-1.5 px-3 py-1 border rounded-sm text-[9px] font-bold tracking-widest uppercase transition-colors', isRecording ? 'bg-red-600/20 border-red-500 text-red-400 animate-pulse shadow-[0_0_10px_rgba(239,68,68,0.3)]' : 'border-neutral-700 hover:border-neutral-500 text-neutral-400 hover:text-white']">
+                <span :class="['w-2 h-2 rounded-full', isRecording ? 'bg-red-500' : 'bg-neutral-500']"></span>
+                {{ isRecording ? 'Export' : 'Rec' }}
+              </button>
+
+              <div class="h-6 w-px bg-neutral-800"></div>
+
+              <div class="flex flex-col gap-0.5">
+                <span class="text-[7px] uppercase font-bold tracking-widest text-neutral-500">Glide</span>
+                <input type="range" min="0" max="100" v-model.number="synthState.glide" class="w-16 text-yellow-500 knob-slider" />
+              </div>
+              <div class="flex flex-col gap-0.5">
+                <span class="text-[7px] uppercase font-bold tracking-widest text-neutral-500">Voices</span>
+                <select v-model="synthState.polyphony" class="bg-transparent text-[9px] text-white outline-none border border-neutral-800 rounded px-1">
+                  <option value="1" class="bg-black">1 (Mono)</option>
+                  <option value="4" class="bg-black">4</option>
+                  <option value="8" class="bg-black">8</option>
+                  <option value="16" class="bg-black">16</option>
+                </select>
+              </div>
+              <div class="h-6 w-px bg-neutral-800"></div>
+              <div class="flex flex-col gap-0.5">
+                <span class="text-[7px] uppercase font-bold tracking-widest text-neutral-500">Master</span>
+                <input type="range" min="-60" max="10" v-model.number="synthState.masterVol" class="w-20 text-blue-500 knob-slider" />
+              </div>
+              <button @click="activeTab = activeTab === 'FX' ? 'OSC' : 'FX'" :class="['px-3 py-1 border rounded-sm text-[9px] font-bold tracking-widest uppercase transition-colors', activeTab === 'FX' ? 'bg-blue-600/20 border-blue-500 text-blue-300' : 'border-neutral-700 hover:border-neutral-500']">
+                FX Rack
+              </button>
+            </div>
+          </header>
+
+          <!-- MAIN SYNTH BODY -->
+          <main class="flex-1 flex p-2 gap-2 min-h-0 relative">
+            
+            <!-- LEFT COLUMN: OSCILLATORS -->
+            <div class="w-[340px] flex flex-col gap-2 shrink-0">
+              
+              <!-- OSC A -->
+              <div class="synth-panel flex-1 rounded-sm border border-neutral-800 flex flex-col relative overflow-hidden">
+                <div class="absolute top-0 left-0 w-1 h-full bg-blue-500"></div>
+                <div class="h-7 border-b border-neutral-800/50 flex items-center px-3 justify-between bg-black/20 shrink-0">
+                  <div class="flex items-center gap-2">
+                    <input type="checkbox" v-model="synthState.oscA.on" class="accent-blue-500 w-3 h-3" />
+                    <span class="text-[10px] font-bold uppercase tracking-widest text-blue-100">OSC A</span>
+                  </div>
+                  <select v-model="synthState.oscA.type" class="bg-transparent text-[9px] text-blue-400 font-bold uppercase outline-none border border-neutral-800 rounded px-1 py-0.5 hover:border-neutral-600">
+                    <option v-for="t in oscTypes" :key="t" :value="t" class="bg-neutral-900">{{ t }}</option>
+                  </select>
+                </div>
+                
+                <div class="p-2.5 flex-1 flex flex-col justify-between">
+                  <div class="flex gap-3 h-16">
+                    <div class="flex-1 flex gap-2">
+                      <template v-if="synthState.oscA.type === 'Wavetable'">
+                         <div class="flex flex-col items-center justify-end gap-1 flex-1">
+                           <input type="range" min="0" max="100" v-model.number="synthState.oscA.wtPos" class="w-full text-blue-400" />
+                           <span class="text-[7px] font-mono uppercase text-neutral-500">Position</span>
+                         </div>
+                         <div class="flex flex-col items-center justify-end gap-1 flex-1">
+                           <input type="range" min="0" max="100" v-model.number="synthState.oscA.warp" class="w-full text-blue-400" />
+                           <span class="text-[7px] font-mono uppercase text-neutral-500">Warp</span>
+                         </div>
+                      </template>
+                      <template v-else-if="synthState.oscA.type === 'Granular'">
+                        <div class="flex flex-col items-center justify-end gap-1 flex-1">
+                          <input type="range" min="1" max="100" v-model.number="synthState.oscA.granSize" class="w-full text-blue-400" />
+                          <span class="text-[7px] font-mono uppercase text-neutral-500">Grn Size</span>
+                        </div>
+                        <div class="flex flex-col items-center justify-end gap-1 flex-1">
+                          <input type="range" min="1" max="100" v-model.number="synthState.oscA.granDens" class="w-full text-blue-400" />
+                          <span class="text-[7px] font-mono uppercase text-neutral-500">Density</span>
+                        </div>
+                      </template>
+                      <template v-else-if="synthState.oscA.type === 'Spectral'">
+                        <div class="flex flex-col items-center justify-end gap-1 flex-1">
+                          <input type="range" min="-50" max="50" v-model.number="synthState.oscA.specFormant" class="w-full text-blue-400" />
+                          <span class="text-[7px] font-mono uppercase text-neutral-500">Formant</span>
+                        </div>
+                        <div class="flex flex-col items-center justify-end gap-1 flex-1">
+                          <input type="range" min="0" max="100" v-model.number="synthState.oscA.specSmear" class="w-full text-blue-400" />
+                          <span class="text-[7px] font-mono uppercase text-neutral-500">Smear</span>
+                        </div>
+                      </template>
+                      <template v-else-if="synthState.oscA.type === 'Multisample'">
+                        <div class="flex flex-col items-center justify-end gap-1 flex-1">
+                          <input type="range" min="0" max="100" v-model.number="synthState.oscA.multiSpread" class="w-full text-blue-400" />
+                          <span class="text-[7px] font-mono uppercase text-neutral-500">Spread</span>
+                        </div>
+                        <div class="flex flex-col items-center justify-end gap-1 flex-1">
+                          <input type="range" min="0" max="100" v-model.number="synthState.oscA.multiCurve" class="w-full text-blue-400" />
+                          <span class="text-[7px] font-mono uppercase text-neutral-500">Vel Curve</span>
+                        </div>
+                      </template>
+                      <template v-else>
+                        <div class="flex flex-col items-center justify-end gap-1 flex-1">
+                          <input type="range" min="0" max="100" v-model.number="synthState.oscA.sampStart" class="w-full text-blue-400" />
+                          <span class="text-[7px] font-mono uppercase text-neutral-500">Start</span>
+                        </div>
+                        <div class="flex flex-col items-center justify-end gap-1 flex-1">
+                          <input type="range" min="0" max="100" v-model.number="synthState.oscA.sampEnd" class="w-full text-blue-400" />
+                          <span class="text-[7px] font-mono uppercase text-neutral-500">End</span>
+                        </div>
+                      </template>
+                    </div>
+
+                    <!-- Dynamic Spectral Visualizer (Mini) -->
+                    <div class="w-16 h-12 bg-[#050608] rounded border border-neutral-800 flex items-center justify-center overflow-hidden shrink-0 self-center shadow-inner relative group" :class="synthState.oscA.type !== 'Wavetable' ? 'cursor-pointer border-blue-500/50' : ''" @click="synthState.oscA.type !== 'Wavetable' && triggerLoadSample('A')">
+                       <canvas ref="oscAWaveCanvas" class="w-full h-full opacity-80"></canvas>
+                       <!-- Overlay for sample loading -->
+                       <div v-if="synthState.oscA.type !== 'Wavetable'" class="absolute inset-0 bg-black/60 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                          <span class="text-[6px] font-bold text-white uppercase tracking-wider">Load</span>
+                       </div>
+                       <!-- Filename display -->
+                       <div v-if="synthState.oscA.type !== 'Wavetable'" class="absolute top-0 left-0 w-full text-[5px] text-center bg-black/70 text-blue-200 truncate px-1 pointer-events-none">{{ sampleNameA }}</div>
+                       <div class="absolute bottom-0 right-0.5 text-[5px] text-blue-500/70 font-mono font-bold pointer-events-none drop-shadow-md">OUT</div>
+                    </div>
+
+                    <div class="w-px bg-neutral-800/50"></div>
+                    <div class="flex-1 grid grid-cols-2 gap-x-2 gap-y-1 text-[7px] font-mono uppercase text-neutral-500">
+                       <div class="flex justify-between items-center"><span>Crs</span><input type="number" v-model="synthState.oscA.coarse" class="w-8 bg-black border border-neutral-700 text-white rounded px-0.5 text-right outline-none" /></div>
+                       <div class="flex justify-between items-center"><span>Fin</span><input type="number" v-model="synthState.oscA.fine" class="w-8 bg-black border border-neutral-700 text-white rounded px-0.5 text-right outline-none" /></div>
+                       <div class="flex justify-between items-center"><span>Phs</span><input type="number" v-model="synthState.oscA.phase" class="w-8 bg-black border border-neutral-700 text-white rounded px-0.5 text-right outline-none" /></div>
+                       <div class="flex justify-between items-center"><span>FM</span><input type="number" v-model="synthState.oscA.fm" class="w-8 bg-black border border-neutral-700 text-white rounded px-0.5 text-right outline-none" /></div>
+                    </div>
+                  </div>
+
+                  <!-- Standard Controls -->
+                  <div class="grid grid-cols-4 gap-2 pt-2 border-t border-neutral-800/50 mt-2">
+                    <div class="flex flex-col items-center gap-1"><span class="text-[7px] text-neutral-600 uppercase">Unison</span><input type="range" min="1" max="16" v-model.number="synthState.oscA.unison" class="w-full text-neutral-400" /><span class="text-[7px] font-mono">{{ synthState.oscA.unison }}v</span></div>
+                    <div class="flex flex-col items-center gap-1"><span class="text-[7px] text-neutral-600 uppercase">Detune</span><input type="range" min="0" max="1" step="0.01" v-model.number="synthState.oscA.detune" class="w-full text-neutral-400" /><span class="text-[7px] font-mono">{{ synthState.oscA.detune.toFixed(2) }}</span></div>
+                    <div class="flex flex-col items-center gap-1"><span class="text-[7px] text-neutral-600 uppercase">Pan</span><input type="range" min="-1" max="1" step="0.1" v-model.number="synthState.oscA.pan" class="w-full text-emerald-400" /><span class="text-[7px] font-mono">{{ synthState.oscA.pan }}</span></div>
+                    <div class="flex flex-col items-center gap-1"><span class="text-[7px] text-neutral-600 uppercase">Level</span><input type="range" min="0" max="100" v-model.number="synthState.oscA.level" class="w-full text-blue-400" /><span class="text-[7px] font-mono">{{ synthState.oscA.level }}</span></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- OSC B -->
+              <div class="synth-panel flex-1 rounded-sm border border-neutral-800 flex flex-col relative overflow-hidden">
+                <div class="absolute top-0 left-0 w-1 h-full bg-emerald-500"></div>
+                <div class="h-7 border-b border-neutral-800/50 flex items-center px-3 justify-between bg-black/20 shrink-0">
+                  <div class="flex items-center gap-2">
+                    <input type="checkbox" v-model="synthState.oscB.on" class="accent-emerald-500 w-3 h-3" />
+                    <span class="text-[10px] font-bold uppercase tracking-widest text-emerald-100">OSC B</span>
+                  </div>
+                  <select v-model="synthState.oscB.type" class="bg-transparent text-[9px] text-emerald-400 font-bold uppercase outline-none border border-neutral-800 rounded px-1 py-0.5 hover:border-neutral-600">
+                    <option v-for="t in oscTypes" :key="t" :value="t" class="bg-neutral-900">{{ t }}</option>
+                  </select>
+                </div>
+                
+                <div class="p-2.5 flex-1 flex flex-col justify-between">
+                  <div class="flex gap-3 h-16">
+                    <div class="flex-1 flex gap-2">
+                      <template v-if="synthState.oscB.type === 'Wavetable'">
+                         <div class="flex flex-col items-center justify-end gap-1 flex-1">
+                           <input type="range" min="0" max="100" v-model.number="synthState.oscB.wtPos" class="w-full text-emerald-400" />
+                           <span class="text-[7px] font-mono uppercase text-neutral-500">Position</span>
+                         </div>
+                         <div class="flex flex-col items-center justify-end gap-1 flex-1">
+                           <input type="range" min="0" max="100" v-model.number="synthState.oscB.warp" class="w-full text-emerald-400" />
+                           <span class="text-[7px] font-mono uppercase text-neutral-500">Warp</span>
+                         </div>
+                      </template>
+                      <template v-else-if="synthState.oscB.type === 'Granular'">
+                        <div class="flex flex-col items-center justify-end gap-1 flex-1">
+                          <input type="range" min="1" max="100" v-model.number="synthState.oscB.granSize" class="w-full text-emerald-400" />
+                          <span class="text-[7px] font-mono uppercase text-neutral-500">Grn Size</span>
+                        </div>
+                        <div class="flex flex-col items-center justify-end gap-1 flex-1">
+                          <input type="range" min="1" max="100" v-model.number="synthState.oscB.granDens" class="w-full text-emerald-400" />
+                          <span class="text-[7px] font-mono uppercase text-neutral-500">Density</span>
+                        </div>
+                      </template>
+                      <template v-else-if="synthState.oscB.type === 'Spectral'">
+                        <div class="flex flex-col items-center justify-end gap-1 flex-1">
+                          <input type="range" min="-50" max="50" v-model.number="synthState.oscB.specFormant" class="w-full text-emerald-400" />
+                          <span class="text-[7px] font-mono uppercase text-neutral-500">Formant</span>
+                        </div>
+                        <div class="flex flex-col items-center justify-end gap-1 flex-1">
+                          <input type="range" min="0" max="100" v-model.number="synthState.oscB.specSmear" class="w-full text-emerald-400" />
+                          <span class="text-[7px] font-mono uppercase text-neutral-500">Smear</span>
+                        </div>
+                      </template>
+                      <template v-else-if="synthState.oscB.type === 'Multisample'">
+                        <div class="flex flex-col items-center justify-end gap-1 flex-1">
+                          <input type="range" min="0" max="100" v-model.number="synthState.oscB.multiSpread" class="w-full text-emerald-400" />
+                          <span class="text-[7px] font-mono uppercase text-neutral-500">Spread</span>
+                        </div>
+                        <div class="flex flex-col items-center justify-end gap-1 flex-1">
+                          <input type="range" min="0" max="100" v-model.number="synthState.oscB.multiCurve" class="w-full text-emerald-400" />
+                          <span class="text-[7px] font-mono uppercase text-neutral-500">Vel Curve</span>
+                        </div>
+                      </template>
+                      <template v-else>
+                        <div class="flex flex-col items-center justify-end gap-1 flex-1">
+                          <input type="range" min="0" max="100" v-model.number="synthState.oscB.sampStart" class="w-full text-emerald-400" />
+                          <span class="text-[7px] font-mono uppercase text-neutral-500">Start</span>
+                        </div>
+                        <div class="flex flex-col items-center justify-end gap-1 flex-1">
+                          <input type="range" min="0" max="100" v-model.number="synthState.oscB.sampEnd" class="w-full text-emerald-400" />
+                          <span class="text-[7px] font-mono uppercase text-neutral-500">End</span>
+                        </div>
+                      </template>
+                    </div>
+                    
+                    <!-- Dynamic Spectral Visualizer (Mini) -->
+                    <div class="w-16 h-12 bg-[#050608] rounded border border-neutral-800 flex items-center justify-center overflow-hidden shrink-0 self-center shadow-inner relative group" :class="synthState.oscB.type !== 'Wavetable' ? 'cursor-pointer border-emerald-500/50' : ''" @click="synthState.oscB.type !== 'Wavetable' && triggerLoadSample('B')">
+                       <canvas ref="oscBWaveCanvas" class="w-full h-full opacity-80"></canvas>
+                       <!-- Overlay for sample loading -->
+                       <div v-if="synthState.oscB.type !== 'Wavetable'" class="absolute inset-0 bg-black/60 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                          <span class="text-[6px] font-bold text-white uppercase tracking-wider">Load</span>
+                       </div>
+                       <!-- Filename display -->
+                       <div v-if="synthState.oscB.type !== 'Wavetable'" class="absolute top-0 left-0 w-full text-[5px] text-center bg-black/70 text-emerald-200 truncate px-1 pointer-events-none">{{ sampleNameB }}</div>
+                       <div class="absolute bottom-0 right-0.5 text-[5px] text-emerald-500/70 font-mono font-bold pointer-events-none drop-shadow-md">OUT</div>
+                    </div>
+
+                    <div class="w-px bg-neutral-800/50"></div>
+                    <div class="flex-1 grid grid-cols-2 gap-x-2 gap-y-1 text-[7px] font-mono uppercase text-neutral-500">
+                       <div class="flex justify-between items-center"><span>Crs</span><input type="number" v-model="synthState.oscB.coarse" class="w-8 bg-black border border-neutral-700 text-white rounded px-0.5 text-right outline-none" /></div>
+                       <div class="flex justify-between items-center"><span>Fin</span><input type="number" v-model="synthState.oscB.fine" class="w-8 bg-black border border-neutral-700 text-white rounded px-0.5 text-right outline-none" /></div>
+                       <div class="flex justify-between items-center"><span>Phs</span><input type="number" v-model="synthState.oscB.phase" class="w-8 bg-black border border-neutral-700 text-white rounded px-0.5 text-right outline-none" /></div>
+                       <div class="flex justify-between items-center"><span>FM</span><input type="number" v-model="synthState.oscB.fm" class="w-8 bg-black border border-neutral-700 text-white rounded px-0.5 text-right outline-none" /></div>
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-4 gap-2 pt-2 border-t border-neutral-800/50 mt-2">
+                    <div class="flex flex-col items-center gap-1"><span class="text-[7px] text-neutral-600 uppercase">Unison</span><input type="range" min="1" max="16" v-model.number="synthState.oscB.unison" class="w-full text-neutral-400" /><span class="text-[7px] font-mono">{{ synthState.oscB.unison }}v</span></div>
+                    <div class="flex flex-col items-center gap-1"><span class="text-[7px] text-neutral-600 uppercase">Detune</span><input type="range" min="0" max="1" step="0.01" v-model.number="synthState.oscB.detune" class="w-full text-neutral-400" /><span class="text-[7px] font-mono">{{ synthState.oscB.detune.toFixed(2) }}</span></div>
+                    <div class="flex flex-col items-center gap-1"><span class="text-[7px] text-neutral-600 uppercase">Pan</span><input type="range" min="-1" max="1" step="0.1" v-model.number="synthState.oscB.pan" class="w-full text-emerald-400" /><span class="text-[7px] font-mono">{{ synthState.oscB.pan }}</span></div>
+                    <div class="flex flex-col items-center gap-1"><span class="text-[7px] text-neutral-600 uppercase">Level</span><input type="range" min="0" max="100" v-model.number="synthState.oscB.level" class="w-full text-emerald-400" /><span class="text-[7px] font-mono">{{ synthState.oscB.level }}</span></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- SUB / NOISE -->
+              <div class="h-24 synth-panel rounded-sm border border-neutral-800 flex relative overflow-hidden">
+                <!-- Sub -->
+                <div class="flex-1 border-r border-neutral-800/50 flex flex-col relative">
+                  <div class="absolute top-0 left-0 w-1 h-full bg-rose-500"></div>
+                  <div class="h-6 border-b border-neutral-800/50 flex items-center px-3 gap-2 bg-black/20">
+                     <input type="checkbox" v-model="synthState.sub.on" class="accent-rose-500 w-3 h-3" />
+                     <span class="text-[9px] font-bold uppercase tracking-widest text-rose-300">SUB</span>
+                  </div>
+                  <div class="flex-1 flex items-center justify-around px-2">
+                     <div class="flex flex-col items-center gap-1">
+                        <select v-model="synthState.sub.shape" class="w-10 bg-black text-[7px] text-white rounded border border-neutral-700 outline-none"><option value="sine">Sin</option><option value="square">Sqr</option><option value="triangle">Tri</option></select>
+                        <span class="text-[7px] uppercase text-neutral-500 mt-0.5">Shape</span>
+                     </div>
+                     <div class="flex flex-col items-center gap-1">
+                        <input type="number" v-model="synthState.sub.oct" class="w-8 bg-black text-center text-[8px] text-white rounded border border-neutral-700 outline-none" />
+                        <span class="text-[7px] uppercase text-neutral-500 mt-0.5">Oct</span>
+                     </div>
+                     <div class="flex flex-col items-center gap-1 w-10">
+                        <input type="range" min="0" max="100" v-model.number="synthState.sub.level" class="w-full text-rose-500" />
+                        <span class="text-[7px] uppercase text-neutral-500 mt-0.5">Level</span>
+                     </div>
+                  </div>
+                </div>
+                <!-- Noise -->
+                <div class="flex-1 flex flex-col relative">
+                  <div class="absolute top-0 left-0 w-1 h-full bg-neutral-400"></div>
+                  <div class="h-6 border-b border-neutral-800/50 flex items-center px-3 gap-2 bg-black/20">
+                     <input type="checkbox" v-model="synthState.noise.on" class="accent-neutral-400 w-3 h-3" />
+                     <span class="text-[9px] font-bold uppercase tracking-widest text-neutral-300">NOISE</span>
+                  </div>
+                  <div class="flex-1 flex items-center justify-around px-2">
+                     <div class="flex flex-col items-center gap-1">
+                        <select v-model="synthState.noise.color" class="w-12 bg-black text-[7px] text-white rounded border border-neutral-700 outline-none"><option value="white">White</option><option value="pink">Pink</option><option value="brown">Brown</option></select>
+                        <span class="text-[7px] uppercase text-neutral-500 mt-0.5">Color</span>
+                     </div>
+                     <div class="flex flex-col items-center gap-1 w-12">
+                        <input type="range" min="0" max="100" v-model.number="synthState.noise.level" class="w-full text-neutral-400" />
+                        <span class="text-[7px] uppercase text-neutral-500 mt-0.5">Level</span>
+                     </div>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+
+            <!-- CENTER COLUMN: METERS & FILTER -->
+            <div class="flex-1 flex flex-col gap-2 min-w-0">
+              
+              <!-- Master VU & Peak/RMS Meters -->
+              <div class="flex-1 synth-panel rounded-sm border border-neutral-800 relative overflow-hidden flex bg-[#0a0c0e]">
+                
+                <!-- Master Dynamics Control Strip -->
+                <div class="w-14 flex flex-col justify-around py-2 px-1 border-r border-neutral-800/50 bg-black/40 z-10 shrink-0 shadow-xl">
+                   <div class="text-[7px] font-bold text-orange-400/80 uppercase tracking-widest text-center mb-1 leading-tight">Master<br>Dyn</div>
+                   
+                   <div class="flex-1 flex flex-col items-center gap-1">
+                      <input type="range" min="-60" max="0" step="1" v-model.number="synthState.masterFx.compThresh" class="flex-1 w-full text-orange-500" style="writing-mode: bt-lr; -webkit-appearance: slider-vertical;" />
+                      <span class="text-[6px] text-neutral-500 uppercase font-mono">Comp</span>
+                   </div>
+                   
+                   <div class="flex-1 flex flex-col items-center gap-1 mt-2">
+                      <input type="range" min="-24" max="0" step="0.1" v-model.number="synthState.masterFx.limitThresh" class="flex-1 w-full text-red-500" style="writing-mode: bt-lr; -webkit-appearance: slider-vertical;" />
+                      <span class="text-[6px] text-neutral-500 uppercase font-mono">Limit</span>
+                   </div>
+                </div>
+
+                <!-- Meters Canvas -->
+                <div class="flex-1 relative">
+                  <canvas ref="metersCanvas" class="w-full h-full absolute inset-0"></canvas>
+                </div>
+              </div>
+
+              <!-- Filter Panel (Expanded) -->
+              <div class="h-44 synth-panel rounded-sm border border-neutral-800 flex flex-col relative shrink-0">
+                <div class="absolute top-0 left-0 w-1 h-full bg-orange-500"></div>
+                <div class="h-7 border-b border-neutral-800/50 flex items-center px-3 justify-between bg-black/20">
+                  <div class="flex items-center gap-2">
+                    <input type="checkbox" v-model="synthState.filter.on" class="accent-orange-500 w-3 h-3" />
+                    <span class="text-[10px] font-bold uppercase tracking-widest text-orange-100">Filter</span>
+                  </div>
+                  <select v-model="synthState.filter.type" class="bg-transparent text-[9px] text-orange-400 font-bold uppercase outline-none border border-neutral-800 rounded px-1 py-0.5">
+                    <option value="lowpass" class="bg-neutral-900">MG Low 12</option>
+                    <option value="highpass" class="bg-neutral-900">HP 24</option>
+                    <option value="bandpass" class="bg-neutral-900">Bandpass</option>
+                  </select>
+                </div>
+                
+                <div class="flex-1 grid grid-cols-3 grid-rows-2 gap-x-6 gap-y-2 p-4">
+                  <!-- Row 1 -->
+                  <div class="flex flex-col items-center justify-end gap-1.5">
+                     <span class="text-[9px] font-mono text-orange-200">{{ synthState.filter.cutoff }} Hz</span>
+                     <input type="range" min="20" max="10000" step="10" v-model.number="synthState.filter.cutoff" class="w-full text-orange-500" />
+                     <span class="text-[8px] font-bold uppercase text-neutral-500">Cutoff</span>
+                  </div>
+                  <div class="flex flex-col items-center justify-end gap-1.5">
+                     <span class="text-[9px] font-mono text-orange-200">{{ synthState.filter.res.toFixed(1) }}</span>
+                     <input type="range" min="0" max="10" step="0.1" v-model.number="synthState.filter.res" class="w-full text-orange-500" />
+                     <span class="text-[8px] font-bold uppercase text-neutral-500">Resonance</span>
+                  </div>
+                  <div class="flex flex-col items-center justify-end gap-1.5">
+                     <span class="text-[9px] font-mono text-orange-200">{{ synthState.filter.drive.toFixed(1) }}</span>
+                     <input type="range" min="0" max="10" step="0.1" v-model.number="synthState.filter.drive" class="w-full text-orange-500" />
+                     <span class="text-[8px] font-bold uppercase text-neutral-500">Drive</span>
+                  </div>
+                  <!-- Row 2 -->
+                  <div class="flex flex-col items-center justify-end gap-1.5">
+                     <span class="text-[9px] font-mono text-neutral-400">{{ synthState.filter.envAmt }}%</span>
+                     <input type="range" min="0" max="100" v-model.number="synthState.filter.envAmt" class="w-full text-neutral-400" />
+                     <span class="text-[8px] font-bold uppercase text-neutral-500">Env Amt</span>
+                  </div>
+                  <div class="flex flex-col items-center justify-end gap-1.5">
+                     <span class="text-[9px] font-mono text-neutral-400">{{ synthState.filter.keytrack }}%</span>
+                     <input type="range" min="0" max="100" v-model.number="synthState.filter.keytrack" class="w-full text-neutral-400" />
+                     <span class="text-[8px] font-bold uppercase text-neutral-500">KBD Track</span>
+                  </div>
+                  <div class="flex flex-col items-center justify-end gap-1.5">
+                     <span class="text-[9px] font-mono text-neutral-400">{{ synthState.filter.pan }}</span>
+                     <input type="range" min="-1" max="1" step="0.1" v-model.number="synthState.filter.pan" class="w-full text-neutral-400" />
+                     <span class="text-[8px] font-bold uppercase text-neutral-500">Pan</span>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+
+            <!-- RIGHT COLUMN: MODULATORS (ENVS / LFOS) -->
+            <div class="w-[320px] grid grid-rows-4 gap-2 shrink-0">
+              
+              <!-- ENV 1 (AMP) -->
+              <div class="synth-panel rounded-sm border border-neutral-800 flex flex-col relative">
+                <div class="absolute top-0 left-0 w-1 h-full bg-purple-500"></div>
+                <div class="h-6 border-b border-neutral-800/50 flex items-center px-3 bg-black/20">
+                  <span class="text-[9px] font-bold uppercase tracking-widest text-purple-400">ENV 1 (AMP)</span>
+                </div>
+                <div class="flex-1 flex px-6 justify-between gap-4 pt-2 pb-1 min-h-0">
+                   <div class="flex flex-col items-center gap-1 w-1/4 h-full min-h-0">
+                     <input type="range" min="0.01" max="2" step="0.01" v-model.number="synthState.env1.a" class="flex-1 w-full min-h-0 text-purple-400" style="writing-mode: bt-lr; -webkit-appearance: slider-vertical;" />
+                     <span class="text-[7px] text-neutral-500 uppercase font-mono shrink-0 leading-none">A</span>
+                   </div>
+                   <div class="flex flex-col items-center gap-1 w-1/4 h-full min-h-0">
+                     <input type="range" min="0.01" max="2" step="0.01" v-model.number="synthState.env1.d" class="flex-1 w-full min-h-0 text-purple-400" style="writing-mode: bt-lr; -webkit-appearance: slider-vertical;" />
+                     <span class="text-[7px] text-neutral-500 uppercase font-mono shrink-0 leading-none">D</span>
+                   </div>
+                   <div class="flex flex-col items-center gap-1 w-1/4 h-full min-h-0">
+                     <input type="range" min="0" max="1" step="0.01" v-model.number="synthState.env1.s" class="flex-1 w-full min-h-0 text-purple-400" style="writing-mode: bt-lr; -webkit-appearance: slider-vertical;" />
+                     <span class="text-[7px] text-neutral-500 uppercase font-mono shrink-0 leading-none">S</span>
+                   </div>
+                   <div class="flex flex-col items-center gap-1 w-1/4 h-full min-h-0">
+                     <input type="range" min="0.01" max="5" step="0.01" v-model.number="synthState.env1.r" class="flex-1 w-full min-h-0 text-purple-400" style="writing-mode: bt-lr; -webkit-appearance: slider-vertical;" />
+                     <span class="text-[7px] text-neutral-500 uppercase font-mono shrink-0 leading-none">R</span>
+                   </div>
+                </div>
+              </div>
+
+              <!-- ENV 2 (FILTER/MOD) -->
+              <div class="synth-panel rounded-sm border border-neutral-800 flex flex-col relative">
+                <div class="absolute top-0 left-0 w-1 h-full bg-cyan-500"></div>
+                <div class="h-6 border-b border-neutral-800/50 flex items-center px-3 bg-black/20">
+                  <span class="text-[9px] font-bold uppercase tracking-widest text-cyan-400">ENV 2 (MOD)</span>
+                </div>
+                <div class="flex-1 flex px-6 justify-between gap-4 pt-2 pb-1 min-h-0">
+                   <div class="flex flex-col items-center gap-1 w-1/4 h-full min-h-0">
+                     <input type="range" min="0.01" max="2" step="0.01" v-model.number="synthState.env2.a" class="flex-1 w-full min-h-0 text-cyan-400" style="writing-mode: bt-lr; -webkit-appearance: slider-vertical;" />
+                     <span class="text-[7px] text-neutral-500 uppercase font-mono shrink-0 leading-none">A</span>
+                   </div>
+                   <div class="flex flex-col items-center gap-1 w-1/4 h-full min-h-0">
+                     <input type="range" min="0.01" max="2" step="0.01" v-model.number="synthState.env2.d" class="flex-1 w-full min-h-0 text-cyan-400" style="writing-mode: bt-lr; -webkit-appearance: slider-vertical;" />
+                     <span class="text-[7px] text-neutral-500 uppercase font-mono shrink-0 leading-none">D</span>
+                   </div>
+                   <div class="flex flex-col items-center gap-1 w-1/4 h-full min-h-0">
+                     <input type="range" min="0" max="1" step="0.01" v-model.number="synthState.env2.s" class="flex-1 w-full min-h-0 text-cyan-400" style="writing-mode: bt-lr; -webkit-appearance: slider-vertical;" />
+                     <span class="text-[7px] text-neutral-500 uppercase font-mono shrink-0 leading-none">S</span>
+                   </div>
+                   <div class="flex flex-col items-center gap-1 w-1/4 h-full min-h-0">
+                     <input type="range" min="0.01" max="5" step="0.01" v-model.number="synthState.env2.r" class="flex-1 w-full min-h-0 text-cyan-400" style="writing-mode: bt-lr; -webkit-appearance: slider-vertical;" />
+                     <span class="text-[7px] text-neutral-500 uppercase font-mono shrink-0 leading-none">R</span>
+                   </div>
+                </div>
+              </div>
+
+              <!-- LFO 1 -->
+              <div class="synth-panel rounded-sm border border-neutral-800 flex flex-col relative">
+                <div class="absolute top-0 left-0 w-1 h-full bg-yellow-500"></div>
+                <div class="h-6 border-b border-neutral-800/50 flex items-center px-3 justify-between bg-black/20">
+                  <span class="text-[9px] font-bold uppercase tracking-widest text-yellow-500">LFO 1</span>
+                  <select v-model="synthState.lfo1.shape" class="bg-transparent text-[8px] text-yellow-500 outline-none">
+                    <option value="sine" class="bg-black">Sine</option>
+                    <option value="triangle" class="bg-black">Tri</option>
+                    <option value="square" class="bg-black">Sqr</option>
+                    <option value="sawtooth" class="bg-black">Saw</option>
+                  </select>
+                </div>
+                <div class="flex-1 flex px-4 items-center justify-between gap-3">
+                   <div class="flex flex-col items-center gap-1 flex-1">
+                     <span class="text-[7px] text-neutral-400 font-mono">{{ synthState.lfo1.rate.toFixed(1) }}</span>
+                     <input type="range" min="0.1" max="20" step="0.1" v-model.number="synthState.lfo1.rate" class="w-full text-yellow-500" />
+                     <span class="text-[7px] text-neutral-600 uppercase mt-0.5">Rate</span>
+                   </div>
+                   <div class="flex flex-col items-center gap-1 flex-1">
+                     <span class="text-[7px] text-neutral-400 font-mono">{{ synthState.lfo1.depth }}%</span>
+                     <input type="range" min="0" max="100" v-model.number="synthState.lfo1.depth" class="w-full text-yellow-500" />
+                     <span class="text-[7px] text-neutral-600 uppercase mt-0.5">Depth</span>
+                   </div>
+                   <div class="flex flex-col items-center gap-1 flex-1">
+                     <span class="text-[7px] text-neutral-400 font-mono">{{ synthState.lfo1.delay }}s</span>
+                     <input type="range" min="0" max="5" step="0.1" v-model.number="synthState.lfo1.delay" class="w-full text-yellow-500" />
+                     <span class="text-[7px] text-neutral-600 uppercase mt-0.5">Delay</span>
+                   </div>
+                </div>
+              </div>
+
+              <!-- LFO 2 -->
+              <div class="synth-panel rounded-sm border border-neutral-800 flex flex-col relative">
+                <div class="absolute top-0 left-0 w-1 h-full bg-[#9a9166]"></div>
+                <div class="h-6 border-b border-neutral-800/50 flex items-center px-3 justify-between bg-black/20">
+                  <span class="text-[9px] font-bold uppercase tracking-widest text-[#9a9166]">LFO 2</span>
+                  <select v-model="synthState.lfo2.shape" class="bg-transparent text-[8px] text-[#9a9166] outline-none">
+                    <option value="sine" class="bg-black">Sine</option>
+                    <option value="triangle" class="bg-black">Tri</option>
+                    <option value="square" class="bg-black">Sqr</option>
+                    <option value="sawtooth" class="bg-black">Saw</option>
+                  </select>
+                </div>
+                <div class="flex-1 flex px-4 items-center justify-between gap-3">
+                   <div class="flex flex-col items-center gap-1 flex-1">
+                     <span class="text-[7px] text-neutral-400 font-mono">{{ synthState.lfo2.rate.toFixed(1) }}</span>
+                     <input type="range" min="0.1" max="20" step="0.1" v-model.number="synthState.lfo2.rate" class="w-full text-[#9a9166]" />
+                     <span class="text-[7px] text-neutral-600 uppercase mt-0.5">Rate</span>
+                   </div>
+                   <div class="flex flex-col items-center gap-1 flex-1">
+                     <span class="text-[7px] text-neutral-400 font-mono">{{ synthState.lfo2.depth }}%</span>
+                     <input type="range" min="0" max="100" v-model.number="synthState.lfo2.depth" class="w-full text-[#9a9166]" />
+                     <span class="text-[7px] text-neutral-600 uppercase mt-0.5">Depth</span>
+                   </div>
+                   <div class="flex flex-col items-center gap-1 flex-1">
+                     <span class="text-[7px] text-neutral-400 font-mono">{{ synthState.lfo2.delay }}s</span>
+                     <input type="range" min="0" max="5" step="0.1" v-model.number="synthState.lfo2.delay" class="w-full text-[#9a9166]" />
+                     <span class="text-[7px] text-neutral-600 uppercase mt-0.5">Delay</span>
+                   </div>
+                </div>
+              </div>
+
+            </div>
+          </main>
+
+          <!-- BOTTOM RACK & KEYBOARD -->
+          <footer class="flex flex-col shrink-0 z-20 border-t border-neutral-800 bg-[#0a0a0a]">
+            
+            <!-- Dynamic Tab Area (FX Rack) -->
+            <div v-show="activeTab === 'FX'" class="h-32 flex w-full border-b border-neutral-800 bg-[#121212]">
+               
+               <!-- 1. Distortion -->
+               <div class="flex-1 flex flex-col border-r border-neutral-800 p-3 bg-[#0d0d0d] min-w-0">
+                  <div class="text-[9px] font-bold text-neutral-500 uppercase tracking-wider flex items-center gap-1.5 mb-2">
+                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-3 h-3 text-rose-500"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+                     Distortion
+                  </div>
+                  <div class="flex flex-col justify-center h-full gap-3">
+                     <div class="flex items-center gap-3">
+                        <span class="text-[8px] font-mono text-neutral-500 uppercase w-8">Drive</span>
+                        <input type="range" min="0" max="1" step="0.01" v-model.number="synthState.fx.dstDrive" class="flex-1 h-1 text-rose-500" />
+                     </div>
+                     <div class="flex items-center gap-3">
+                        <span class="text-[8px] font-mono text-neutral-500 uppercase w-8">Tone</span>
+                        <input type="range" min="0" max="1" step="0.01" v-model.number="synthState.fx.dstTone" class="flex-1 h-1 text-rose-500" />
+                     </div>
+                     <div class="flex items-center gap-3">
+                        <span class="text-[8px] font-mono text-neutral-500 uppercase w-8">Mix</span>
+                        <input type="range" min="0" max="1" step="0.01" v-model.number="synthState.fx.dstWet" class="flex-1 h-1 text-rose-500" />
+                     </div>
+                  </div>
+               </div>
+
+               <!-- 2. Modulation -->
+               <div class="flex-1 flex flex-col border-r border-neutral-800 p-3 bg-[#0d0d0d] min-w-0">
+                  <div class="text-[9px] font-bold text-neutral-500 uppercase tracking-wider flex items-center gap-1.5 mb-2">
+                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-3 h-3 text-indigo-400"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+                     Modulation
+                  </div>
+                  <div class="flex flex-col justify-center h-full gap-3">
+                     <div class="flex items-center gap-3">
+                        <span class="text-[8px] font-mono text-neutral-500 uppercase w-8">Rate</span>
+                        <input type="range" min="0.1" max="10" step="0.1" v-model.number="synthState.fx.choRate" class="flex-1 h-1 text-indigo-400" />
+                     </div>
+                     <div class="flex items-center gap-3">
+                        <span class="text-[8px] font-mono text-neutral-500 uppercase w-8">Depth</span>
+                        <input type="range" min="0" max="1" step="0.01" v-model.number="synthState.fx.choDepth" class="flex-1 h-1 text-indigo-400" />
+                     </div>
+                     <div class="flex items-center gap-3">
+                        <span class="text-[8px] font-mono text-neutral-500 uppercase w-8">Mix</span>
+                        <input type="range" min="0" max="1" step="0.01" v-model.number="synthState.fx.choWet" class="flex-1 h-1 text-indigo-400" />
+                     </div>
+                  </div>
+               </div>
+
+               <!-- 3. Delay -->
+               <div class="flex-1 flex flex-col border-r border-neutral-800 p-3 bg-[#0d0d0d] min-w-0">
+                  <div class="text-[9px] font-bold text-neutral-500 uppercase tracking-wider flex items-center gap-1.5 mb-2">
+                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-3 h-3 text-pink-400"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                     Delay
+                  </div>
+                  <div class="flex flex-col justify-center h-full gap-3">
+                     <div class="flex items-center gap-3">
+                        <span class="text-[8px] font-mono text-neutral-500 uppercase w-8">Time</span>
+                        <input type="range" min="0.1" max="2" step="0.05" v-model.number="synthState.fx.dlyTime" class="flex-1 h-1 text-pink-400" />
+                     </div>
+                     <div class="flex items-center gap-3">
+                        <span class="text-[8px] font-mono text-neutral-500 uppercase w-8">Fbk</span>
+                        <input type="range" min="0" max="0.95" step="0.01" v-model.number="synthState.fx.dlyFeed" class="flex-1 h-1 text-pink-400" />
+                     </div>
+                     <div class="flex items-center gap-3">
+                        <span class="text-[8px] font-mono text-neutral-500 uppercase w-8">Mix</span>
+                        <input type="range" min="0" max="1" step="0.01" v-model.number="synthState.fx.dlyWet" class="flex-1 h-1 text-pink-400" />
+                     </div>
+                  </div>
+               </div>
+
+               <!-- 4. Reverb -->
+               <div class="flex-1 flex flex-col p-3 bg-[#0d0d0d] min-w-0">
+                  <div class="text-[9px] font-bold text-neutral-500 uppercase tracking-wider flex items-center gap-1.5 mb-2">
+                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-3 h-3 text-purple-400"><path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/></svg>
+                     Reverb
+                  </div>
+                  <div class="flex flex-col justify-center h-full gap-3">
+                     <div class="flex items-center gap-3">
+                        <span class="text-[8px] font-mono text-neutral-500 uppercase w-8">Size</span>
+                        <input type="range" min="0.1" max="1" step="0.01" v-model.number="synthState.fx.revSize" class="flex-1 h-1 text-purple-400" />
+                     </div>
+                     <div class="flex items-center gap-3">
+                        <span class="text-[8px] font-mono text-neutral-500 uppercase w-8">Decay</span>
+                        <input type="range" min="0.1" max="10" step="0.1" v-model.number="synthState.fx.revDecay" class="flex-1 h-1 text-purple-400" />
+                     </div>
+                     <div class="flex items-center gap-3">
+                        <span class="text-[8px] font-mono text-neutral-500 uppercase w-8">Mix</span>
+                        <input type="range" min="0" max="1" step="0.01" v-model.number="synthState.fx.revWet" class="flex-1 h-1 text-purple-400" />
+                     </div>
+                  </div>
+               </div>
+            </div>
+
+            <!-- KEYBOARD -->
+            <div class="h-28 w-full flex relative pb-1 px-1 bg-[#1a1a1a] border-t-4 border-neutral-900 group">
+               
+               <!-- Swell Toggle Tab -->
+               <div @click="synthState.swellEnabled = !synthState.swellEnabled" :class="['absolute -top-6 right-4 px-3 py-1 rounded-t-md text-[8px] font-bold tracking-widest uppercase border border-neutral-800 border-b-0 cursor-pointer transition-colors z-20', synthState.swellEnabled ? 'bg-blue-600/20 text-blue-300 border-blue-500/50' : 'bg-[#1a1a1a] text-neutral-500 hover:text-white']">
+                  SWELL: {{ synthState.swellEnabled ? 'ON' : 'OFF' }}
+               </div>
+
+               <!-- Helper overlay explaining expression -->
+               <div class="absolute -top-7 left-1/2 -translate-x-1/2 bg-blue-500/10 text-blue-300 px-3 py-1 rounded-t-md text-[8px] font-bold tracking-widest uppercase border border-blue-500/30 border-b-0 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                  EXPRESSION SWELL: CLICK & DRAG UP/DOWN (ENABLE ON RIGHT)
+               </div>
+
+               <div class="flex-1 flex relative mt-1">
+                  <!-- White Keys Base -->
+                  <div class="flex w-full h-full relative z-0">
+                    <template v-for="(k, i) in keyboardKeys" :key="i">
+                      <div v-if="!k.isBlack" 
+                           @mousedown="onKeyMouseDown($event, k.note)" 
+                           @mouseup="onKeyMouseUp(k.note)" 
+                           @mouseleave="onKeyMouseLeave(k.note)"
+                           @mouseenter="onKeyMouseEnter($event, k.note)"
+                           :class="['flex-1 key-white cursor-pointer', activeNotes.has(k.note) ? 'active' : '']"></div>
+                    </template>
+                  </div>
+                  <!-- Black Keys Overlay -->
+                  <div class="absolute inset-0 flex w-full h-full pointer-events-none">
+                    <template v-for="(k, i) in keyboardKeys" :key="'b'+i">
+                      <div v-if="!k.isBlack && i < keyboardKeys.length - 1 && keyboardKeys[i+1].isBlack" class="flex-1 flex justify-end h-full">
+                         <div @mousedown.stop="onKeyMouseDown($event, keyboardKeys[i+1].note)" 
+                              @mouseup.stop="onKeyMouseUp(keyboardKeys[i+1].note)" 
+                              @mouseleave="onKeyMouseLeave(keyboardKeys[i+1].note)"
+                              @mouseenter.stop="onKeyMouseEnter($event, keyboardKeys[i+1].note)"
+                              :class="['key-black cursor-pointer pointer-events-auto', activeNotes.has(keyboardKeys[i+1].note) ? 'active' : '']"></div>
+                      </div>
+                      <div v-else-if="!k.isBlack" class="flex-1 h-full"></div>
+                    </template>
+                  </div>
+               </div>
+            </div>
+          </footer>
+        </div>
+      `
+    };
+
+    createApp(App).mount('#app');
+  </script>
+</body>
+</html>

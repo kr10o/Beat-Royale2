@@ -1,0 +1,31 @@
+{
+  "name": "beat-royale",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "samples": "node scripts/generate-samples.mjs",
+    "build": "npm run samples && vite build",
+    "dev": "npm run build && wrangler dev --port 8787",
+    "types": "wrangler types",
+    "check": "vue-tsc --noEmit && tsc -p tsconfig.worker.json --noEmit",
+    "test": "node scripts/test.mjs",
+    "test:integration": "node scripts/integration.mjs",
+    "test:ranked": "wrangler deploy --dry-run --outdir .wrangler/deploy && node scripts/ranked-integration.mjs"
+  },
+  "dependencies": {
+    "@fontsource-variable/dm-sans": "^5.3.0",
+    "@fontsource-variable/space-grotesk": "^5.3.0",
+    "vue": "^3.5.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "latest",
+    "@types/node": "^26.6.6",
+    "@vitejs/plugin-vue": "latest",
+    "typescript": "latest",
+    "vite": "latest",
+    "vue-tsc": "latest",
+    "wrangler": "latest",
+    "ws": "^8.22.0"
+  }
+}
